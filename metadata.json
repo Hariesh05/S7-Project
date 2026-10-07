@@ -1,0 +1,6 @@
+{
+  "name": "AI-Based Skill Matching and Placement Recommendation System",
+  "description": "AI-powered career platform providing semantic skill matching, personalized learning roadmaps, ATS resume optimization, AI mock interviews, and recruiter candidate ranking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

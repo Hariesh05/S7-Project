@@ -15,26 +15,26 @@ import confetti from 'canvas-confetti';
 
 interface ApplyConfirmationModalProps {
   job: Job | null;
-  matchScore?: number;
+  matchScore: number;
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (jobId: string) => Promise<void>;
-  studentName?: string;
-  studentDegree?: string;
-  resumeFileName?: string;
-  readinessScore?: number;
+  studentName: string;
+  studentDegree: string;
+  resumeFileName: string;
+  readinessScore: number;
 }
 
 export const ApplyConfirmationModal: React.FC<ApplyConfirmationModalProps> = ({
   job,
-  matchScore = 88,
+  matchScore,
   isOpen,
   onClose,
   onConfirm,
-  studentName = 'Alex Chen',
-  studentDegree = 'B.Tech AI & Data Science (2026)',
-  resumeFileName = 'Alex_Chen_Tech_Resume_2026.pdf',
-  readinessScore = 86,
+  studentName,
+  studentDegree,
+  resumeFileName,
+  readinessScore,
 }) => {
   const [submitting, setSubmitting] = useState(false);
 
@@ -119,7 +119,7 @@ export const ApplyConfirmationModal: React.FC<ApplyConfirmationModalProps> = ({
                 <span className="font-bold text-slate-900">{studentName}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">Degree & Cohort:</span>
+                <span className="text-slate-500 font-medium">Degree:</span>
                 <span className="font-semibold text-slate-800">{studentDegree}</span>
               </div>
               <div className="flex justify-between items-center">

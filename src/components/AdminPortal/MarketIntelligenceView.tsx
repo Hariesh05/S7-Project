@@ -43,7 +43,6 @@ export const MarketIntelligenceView: React.FC = () => {
     name: t.skill.split(' ')[0],
     fullName: t.skill,
     demand: t.demandIndex,
-    growth: t.growthYoY,
     positions: t.openPositionsCount,
   }));
 
@@ -56,17 +55,17 @@ export const MarketIntelligenceView: React.FC = () => {
             <div className="flex items-center space-x-2">
               <Activity className="w-5 h-5 text-indigo-600" />
               <h2 className="text-lg font-bold text-slate-900">
-                Market Intelligence & Technology Trends (2024-2026)
+                Skill Demand in Current Job Listings
               </h2>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Real-time campus placement demand analytics vs national tech hiring indexes.
+              Counts are from active listings, including clearly labeled demo jobs; no external market feed is connected.
             </p>
           </div>
 
           <div className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-100 text-xs text-indigo-700">
             <Info className="w-4 h-4 shrink-0" />
-            <span>Seed & Verified Aggregated Market Data</span>
+            <span>Live platform data</span>
           </div>
         </div>
 
@@ -74,9 +73,9 @@ export const MarketIntelligenceView: React.FC = () => {
         <div className="pt-6">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-              Hiring Demand Index by Technology
+              Active postings by required skill
             </h3>
-            <span className="text-xs text-slate-500">Scale: 0 - 100</span>
+            <span className="text-xs text-slate-500">Relative listing index</span>
           </div>
 
           <div className="h-64 w-full">
@@ -92,9 +91,8 @@ export const MarketIntelligenceView: React.FC = () => {
                       return (
                         <div className="bg-slate-900 text-white p-3 rounded-xl text-xs shadow-xl space-y-1">
                           <p className="font-bold">{data.fullName}</p>
-                          <p className="text-indigo-300">Demand Index: {data.demand}/100</p>
-                          <p className="text-emerald-400">Growth YoY: +{data.growth}%</p>
-                          <p className="text-slate-400">Open Postings: {data.positions.toLocaleString()}</p>
+                          <p className="text-indigo-300">Relative listing index: {data.demand}/100</p>
+                          <p className="text-slate-400">Required in {data.positions} listing(s)</p>
                         </div>
                       );
                     }
@@ -105,7 +103,7 @@ export const MarketIntelligenceView: React.FC = () => {
                   {chartData.map((entry, index) => (
                     <Cell
                       key={`cell-${index}`}
-                      fill={entry.growth > 0 ? '#4f46e5' : '#94a3b8'}
+                      fill="#4f46e5"
                     />
                   ))}
                 </Bar>
@@ -115,33 +113,25 @@ export const MarketIntelligenceView: React.FC = () => {
         </div>
       </div>
 
-      {/* Rising vs Declining Trends Table */}
+      {/* Listing demand details */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
-          Skill Trajectory & YoY Momentum
+          Required Skills by Active Listings
         </h3>
 
         <div className="divide-y divide-slate-100">
-          {trends.map(t => (
+          {trends.length ? trends.map(t => (
             <div key={t.skill} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center space-x-3">
                 <div
-                  className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                    t.trendDirection === 'up'
-                      ? 'bg-emerald-50 text-emerald-600'
-                      : 'bg-rose-50 text-rose-600'
-                  }`}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-50 text-indigo-600"
                 >
-                  {t.trendDirection === 'up' ? (
-                    <TrendingUp className="w-4 h-4" />
-                  ) : (
-                    <TrendingDown className="w-4 h-4" />
-                  )}
+                  <TrendingUp className="w-4 h-4" />
                 </div>
                 <div>
                   <h4 className="text-xs font-bold text-slate-900">{t.skill}</h4>
                   <p className="text-[11px] text-slate-500 capitalize">
-                    {t.category} · {t.openPositionsCount.toLocaleString()} Open Roles
+                    {t.category} · required in {t.openPositionsCount} listing(s)
                   </p>
                 </div>
               </div>
@@ -152,18 +142,12 @@ export const MarketIntelligenceView: React.FC = () => {
                   <span className="font-bold text-slate-800">{t.demandIndex}/100</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 font-semibold block">YoY Growth</span>
-                  <span
-                    className={`font-bold ${
-                      t.growthYoY > 0 ? 'text-emerald-600' : 'text-rose-600'
-                    }`}
-                  >
-                    {t.growthYoY > 0 ? `+${t.growthYoY}%` : `${t.growthYoY}%`}
-                  </span>
+                  <span className="text-[10px] text-slate-400 font-semibold block">Listing Index</span>
+                  <span className="font-bold text-indigo-600">{t.demandIndex}/100</span>
                 </div>
               </div>
             </div>
-          ))}
+          )) : <p className="py-8 text-center text-sm text-slate-500">Post jobs with required skills to see platform demand.</p>}
         </div>
       </div>
     </div>

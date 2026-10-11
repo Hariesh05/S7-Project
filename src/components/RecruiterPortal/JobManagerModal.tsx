@@ -14,42 +14,44 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
   onJobCreated,
 }) => {
   const [title, setTitle] = useState('');
-  const [location, setLocation] = useState('San Francisco, CA (or Remote)');
-  const [workplaceType, setWorkplaceType] = useState<'hybrid' | 'remote' | 'on-site'>('hybrid');
-  const [salaryRange, setSalaryRange] = useState('$150,000 - $185,000');
-  const [experienceLevel, setExperienceLevel] = useState('Entry-level');
+  const [companyName, setCompanyName] = useState('');
+  const [location, setLocation] = useState('');
+  const [workplaceType, setWorkplaceType] = useState<Job['workplaceType'] | ''>('');
+  const [salaryRange, setSalaryRange] = useState('');
+  const [employmentType, setEmploymentType] = useState<Job['employmentType'] | ''>('');
+  const [experienceLevel, setExperienceLevel] = useState<Job['experienceLevel'] | ''>('');
   const [description, setDescription] = useState('');
-  const [requiredSkills, setRequiredSkills] = useState<string[]>(['TypeScript', 'React', 'Node.js']);
-  const [preferredSkills, setPreferredSkills] = useState<string[]>(['PostgreSQL', 'Docker']);
-  const [responsibilities, setResponsibilities] = useState<string[]>([
-    'Design and deploy resilient API endpoints',
-    'Write clean, typed frontend user interfaces',
-  ]);
+  const [requiredSkills, setRequiredSkills] = useState<string[]>([]);
+  const [preferredSkills, setPreferredSkills] = useState<string[]>([]);
+  const [responsibilities, setResponsibilities] = useState<string[]>([]);
 
   const [newReqSkill, setNewReqSkill] = useState('');
   const [newPrefSkill, setNewPrefSkill] = useState('');
   const [newResp, setNewResp] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
 
   if (!isOpen) return null;
 
   const handleAnalyzeJD = async () => {
     if (!description.trim()) return;
     setIsAnalyzing(true);
+    setFormError('');
     try {
       const res = await fetch('/api/recruiter/jobs/analyze-jd', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description }),
+        body: JSON.stringify({ title, companyName, description }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not analyze job description');
       if (data.requiredSkills) setRequiredSkills(data.requiredSkills);
       if (data.preferredSkills) setPreferredSkills(data.preferredSkills);
       if (data.responsibilities) setResponsibilities(data.responsibilities);
       if (data.experienceLevel) setExperienceLevel(data.experienceLevel);
     } catch (err) {
-      console.error('JD analysis error:', err);
+      setFormError(err instanceof Error ? err.message : 'Could not analyze job description');
     } finally {
       setIsAnalyzing(false);
     }
@@ -58,14 +60,17 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setFormError('');
     try {
       const res = await fetch('/api/recruiter/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          companyName,
           title,
           location,
           workplaceType,
+          employmentType,
           salaryRange,
           experienceLevel,
           description,
@@ -75,10 +80,11 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
         }),
       });
       const created = await res.json();
+      if (!res.ok) throw new Error(created.error || 'Could not create job posting');
       onJobCreated(created);
       onClose();
     } catch (err) {
-      console.error('Error creating job:', err);
+      setFormError(err instanceof Error ? err.message : 'Could not create job posting');
     } finally {
       setIsSubmitting(false);
     }
@@ -100,7 +106,18 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {formError && <p role="alert" className="text-xs text-rose-700">{formError}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Company</label>
+              <input
+                type="text"
+                required
+                value={companyName}
+                onChange={e => setCompanyName(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Job Title</label>
               <input
@@ -117,7 +134,7 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
               <input
                 type="text"
                 required
-                placeholder="e.g. San Francisco, CA (Hybrid)"
+                placeholder="Enter a location or specify remote"
                 value={location}
                 onChange={e => setLocation(e.target.value)}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
@@ -125,7 +142,7 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Salary Range</label>
               <input
@@ -139,12 +156,31 @@ export const JobManagerModal: React.FC<JobManagerModalProps> = ({
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Experience Level</label>
               <select
                 value={experienceLevel}
-                onChange={e => setExperienceLevel(e.target.value)}
+                onChange={e => setExperienceLevel(e.target.value as Job['experienceLevel'] | '')}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white"
               >
+                <option value="">Select experience level</option>
                 <option value="Entry-level">Entry-level</option>
                 <option value="Mid-level">Mid-level</option>
                 <option value="Senior">Senior</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Employment Type</label>
+              <select required value={employmentType} onChange={e => setEmploymentType(e.target.value as Job['employmentType'] | '')} className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white">
+                <option value="">Select employment type</option>
+                <option value="Full-time">Full-time</option>
+                <option value="Internship">Internship</option>
+                <option value="Contract">Contract</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Workplace Type</label>
+              <select required value={workplaceType} onChange={e => setWorkplaceType(e.target.value as Job['workplaceType'] | '')} className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white">
+                <option value="">Select workplace type</option>
+                <option value="remote">Remote</option>
+                <option value="hybrid">Hybrid</option>
+                <option value="on-site">On-site</option>
               </select>
             </div>
           </div>

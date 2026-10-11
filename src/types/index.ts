@@ -114,6 +114,7 @@ export interface Job {
   postedAt: string;
   deadline?: string;
   applicantsCount: number;
+  isDemo?: boolean;
 }
 
 export interface ExplainableMatchScore {
@@ -123,7 +124,7 @@ export interface ExplainableMatchScore {
   experienceMatch: number; // 0-100
   educationMatch: number; // 0-100
   projectRelevance: number; // 0-100
-  vectorSimilarity: number; // 0-1 cosine similarity
+  vectorSimilarity: number | null; // null when no vector embedding was computed
   whyRecommended: string[];
   matchedSkills: string[];
   missingSkills: {
@@ -131,7 +132,6 @@ export interface ExplainableMatchScore {
     important: string[];
     optional: string[];
   };
-  projectedReadinessBoost: number;
 }
 
 export interface JobRecommendation {
@@ -163,9 +163,10 @@ export interface SkillGapItem {
   targetRole: string;
   studentCurrentLevel: number; // 0 if missing
   requiredLevel: number;
-  learningDifficulty: 'Beginner' | 'Intermediate' | 'Advanced';
+  learningDifficulty: 'Beginner' | 'Intermediate' | 'Advanced' | 'Not assessed';
   estimatedHours: number;
   prerequisitesMet: boolean;
+  prerequisitesKnown?: boolean;
   missingPrerequisites: string[];
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Job, JobRecommendation } from '../../types/index.ts';
+import { Job, JobRecommendation, StudentProfile, User } from '../../types/index.ts';
 import { ExplainableMatchModal } from './ExplainableMatchModal.tsx';
 import { ApplyConfirmationModal } from './ApplyConfirmationModal.tsx';
 import { CancelApplicationModal } from './CancelApplicationModal.tsx';
@@ -18,10 +18,12 @@ import {
 } from 'lucide-react';
 
 interface JobRecommendationsProps {
+  profile: StudentProfile;
+  currentUser: User;
   onOpenATSWithJob?: (jobDescription: string) => void;
 }
 
-export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenATSWithJob }) => {
+export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ profile, currentUser, onOpenATSWithJob }) => {
   const [recommendations, setRecommendations] = useState<JobRecommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -48,9 +50,10 @@ export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenAT
     try {
       const res = await fetch('/api/student/job-matches');
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not load job listings');
       setRecommendations(data);
     } catch (err) {
-      console.error('Error fetching jobs:', err);
+      showToast(err instanceof Error ? err.message : 'Could not load job listings');
     } finally {
       setLoading(false);
     }
@@ -160,11 +163,11 @@ export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenAT
             <div className="flex items-center space-x-2">
               <Sparkles className="w-5 h-5 text-indigo-600" />
               <h2 className="text-lg font-bold text-slate-900">
-                Semantic Resume-to-Job Matching Engine
+                Profile-to-Job Skills Matching
               </h2>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Neural vector similarity + explainable multidimensional ranking against live postings.
+              Skills and experience are compared with requirements from active job listings.
             </p>
           </div>
 
@@ -185,11 +188,13 @@ export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenAT
         {loading ? (
           <div className="py-16 text-center text-xs text-slate-500">
             <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-            Computing vector embeddings & ranking postings...
+            Comparing your profile with active listings...
           </div>
         ) : filtered.length === 0 ? (
           <div className="py-12 text-center text-xs text-slate-500">
-            No matching job recommendations found. Try broadening your search.
+            {recommendations.length
+              ? 'No listings match this search.'
+              : 'No active job listings have been posted yet.'}
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 pt-6">
@@ -213,6 +218,7 @@ export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenAT
                     <div className="space-y-1">
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-bold text-indigo-600">{job.companyName}</span>
+                        {job.isDemo && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800">DEMO</span>}
                         <span className="text-slate-300">·</span>
                         <span className="text-xs text-slate-500 capitalize">{job.workplaceType}</span>
                         <span className="text-slate-300">·</span>
@@ -270,7 +276,7 @@ export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenAT
                         <span className="text-[11px] font-semibold text-slate-400 uppercase">Match</span>
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        Cosine Sim: <span className="font-mono text-slate-700 font-bold">{matchScore.vectorSimilarity}</span>
+                        Vector similarity: <span className="font-mono text-slate-700 font-bold">{typeof matchScore.vectorSimilarity === 'number' ? matchScore.vectorSimilarity.toFixed(2) : 'Not computed'}</span>
                       </div>
                     </div>
 
@@ -362,6 +368,10 @@ export const JobRecommendations: React.FC<JobRecommendationsProps> = ({ onOpenAT
         <ApplyConfirmationModal
           job={confirmJob.job}
           matchScore={confirmJob.matchScore}
+          studentName={currentUser.name}
+          studentDegree={profile.degree}
+          resumeFileName={profile.resumeFileName || ''}
+          readinessScore={profile.placementReadiness.overall}
           isOpen={Boolean(confirmJob)}
           onClose={() => setConfirmJob(null)}
           onConfirm={async jobId => {

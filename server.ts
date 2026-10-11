@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { OAuth2Client } from 'google-auth-library';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
@@ -12,22 +15,10 @@ import {
   JobApplication,
   SkillNode,
   RoadmapStep,
+  StudentSkill,
 } from './src/types/index.ts';
 
-import {
-  POSTGRES_SCHEMA_SQL,
-  SEED_USERS,
-  SEED_STUDENT_PROFILE,
-  SEED_JOBS,
-  SEED_SKILLS,
-  SEED_SKILL_EDGES,
-  SEED_COURSES,
-  SEED_PROJECTS,
-  SEED_MARKET_TRENDS,
-  SEED_APPLICATIONS,
-  SEED_MODEL_METRICS,
-  calculateLocalSemanticMatch,
-} from './src/server/db.ts';
+import { calculateLocalSemanticMatch } from './src/server/matching.ts';
 
 import {
   hasGeminiKey,
@@ -40,8 +31,22 @@ import {
 } from './src/server/gemini.ts';
 
 import { createRequire } from 'module';
+import { parseResumeWithNlp } from './src/server/resumeNlp.ts';
+import {
+  database,
+  deleteApplication,
+  initializeStorage,
+  saveApplication,
+  saveFeedback,
+  saveJob,
+  saveSkill,
+  saveStudentProfile,
+  seedDemoJobs,
+  saveUser,
+} from './src/server/storage.ts';
 const nodeRequire = createRequire(import.meta.url);
 const { PDFParse } = nodeRequire('pdf-parse');
+const mammoth = nodeRequire('mammoth');
 
 dotenv.config();
 
@@ -50,40 +55,183 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const ADMIN_EMAILS = new Set(
+  (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(email => email.trim().toLowerCase())
+    .filter(Boolean)
+);
+const RECRUITER_EMAILS = new Set(
+  (process.env.RECRUITER_EMAILS || '')
+    .split(',')
+    .map(email => email.trim().toLowerCase())
+    .filter(Boolean)
+);
+const SESSION_SECRET = process.env.SESSION_SECRET || randomBytes(32).toString('hex');
+const requestUserStorage = new AsyncLocalStorage<string>();
+const googleAuthClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // In-Memory Database State (mimicking PostgreSQL relational store with session state)
-let users: User[] = [...SEED_USERS];
-let currentUserId = 'user_alex'; // Default active user: Alex Chen (Student)
-let studentProfiles: Record<string, StudentProfile> = {
-  user_alex: { ...SEED_STUDENT_PROFILE },
-};
-let jobs: Job[] = [...SEED_JOBS];
-let skills: SkillNode[] = [...SEED_SKILLS];
-let applications: JobApplication[] = [...SEED_APPLICATIONS];
-let marketTrends = [...SEED_MARKET_TRENDS];
-let modelMetrics = { ...SEED_MODEL_METRICS };
+let users: User[] = [];
+let studentProfiles: Record<string, StudentProfile> = {};
+let jobs: Job[] = [];
+let skills: SkillNode[] = [];
+let applications: JobApplication[] = [];
+let marketTrends: any[] = [];
 let feedbackList: any[] = [];
 
 // Helper to get active user
 const getCurrentUser = () => {
-  return users.find(u => u.id === currentUserId) || users[0];
+  const userId = requestUserStorage.getStore();
+  const user = users.find(candidate => candidate.id === userId);
+  if (!user) throw new Error('Authenticated user not found');
+  return user;
+};
+
+const getActiveUserId = () => {
+  const userId = requestUserStorage.getStore();
+  if (!userId) throw new Error('Authenticated user context is missing');
+  return userId;
+};
+
+const createStudentProfile = (user: User): StudentProfile => ({
+  id: `student_${user.id}`,
+  userId: user.id,
+  headline: `${user.name} · Student`,
+  university: '',
+  degree: '',
+  graduationYear: new Date().getFullYear(),
+  cgpa: 0,
+  targetRoles: [],
+  bio: '',
+  skills: [],
+  education: [],
+  experience: [],
+  projects: [],
+  certifications: [],
+  placementReadiness: {
+    overall: 0,
+    breakdown: {
+      technicalSkills: 0,
+      projectsPortfolio: 0,
+      resumeAtsQuality: 0,
+      mockInterviewPerformance: 0,
+      marketAlignment: 0,
+    },
+    percentileRank: 0,
+    strengths: [],
+    improvementAreas: [],
+  },
+  atsScore: 0,
+  resumeUrl: undefined,
+  resumeFileName: '',
+  resumeLastUpdated: undefined,
+  resumeRawText: '',
+});
+
+async function loadPersistentState() {
+  const [userRows, profileRows, jobRows, applicationRows, skillRows, trendRows, feedbackRows] = await Promise.all([
+    database.query('SELECT id, email, name, avatar_url, role, created_at FROM career_app.users'),
+    database.query('SELECT user_id, data FROM career_app.student_profiles'),
+    database.query('SELECT id, data FROM career_app.jobs ORDER BY created_at DESC'),
+    database.query('SELECT data FROM career_app.applications ORDER BY created_at DESC'),
+    database.query('SELECT data FROM career_app.skills ORDER BY id'),
+    database.query('SELECT data FROM career_app.market_trends ORDER BY id'),
+    database.query('SELECT data FROM career_app.feedback ORDER BY created_at DESC'),
+  ]);
+
+  users = userRows.rows.map(row => ({
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    avatarUrl: row.avatar_url,
+    role: row.role,
+    createdAt: new Date(row.created_at).toISOString(),
+  }));
+  studentProfiles = Object.fromEntries(profileRows.rows.map(row => [row.user_id, row.data]));
+  jobs = jobRows.rows.map(row => row.data);
+  applications = applicationRows.rows.map(row => row.data);
+  skills = skillRows.rows.map(row => row.data);
+  marketTrends = trendRows.rows.map(row => row.data);
+  feedbackList = feedbackRows.rows.map(row => row.data);
+}
+
+async function synchronizeAllowlistedRoles() {
+  for (const user of users) {
+    const email = user.email.toLowerCase();
+    const role = ADMIN_EMAILS.has(email)
+      ? 'admin'
+      : RECRUITER_EMAILS.has(email)
+        ? 'recruiter'
+        : 'student';
+    if (user.role !== role) {
+      user.role = role;
+      await saveUser(user);
+    }
+    if (role === 'student' && !studentProfiles[user.id]) {
+      studentProfiles[user.id] = createStudentProfile(user);
+      await saveStudentProfile(user.id, studentProfiles[user.id]);
+    }
+  }
+}
+
+const getSessionUserId = (req: express.Request) => {
+  const sessionCookie = req.headers.cookie
+    ?.split(';')
+    .map(cookie => cookie.trim())
+    .find(cookie => cookie.startsWith('nexus_session='))
+    ?.slice('nexus_session='.length);
+  if (!sessionCookie) return null;
+
+  const [userId, signature] = decodeURIComponent(sessionCookie).split('.');
+  if (!userId || !signature) return null;
+  const expected = createHmac('sha256', SESSION_SECRET).update(userId).digest('hex');
+  const suppliedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return suppliedBuffer.length === expectedBuffer.length && timingSafeEqual(suppliedBuffer, expectedBuffer)
+    ? userId
+    : null;
+};
+
+const setSessionCookie = (res: express.Response, userId: string) => {
+  const signature = createHmac('sha256', SESSION_SECRET).update(userId).digest('hex');
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `nexus_session=${encodeURIComponent(`${userId}.${signature}`)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure}`);
 };
 
 const getActiveStudentProfile = (): StudentProfile => {
-  if (!studentProfiles[currentUserId]) {
+  const userId = getActiveUserId();
+  if (!studentProfiles[userId]) {
     const user = getCurrentUser();
-    studentProfiles[currentUserId] = {
-      ...SEED_STUDENT_PROFILE,
-      id: `student_${user.id}`,
-      userId: user.id,
-      headline: `${user.name} · Aspiring Engineer`,
-    };
+    studentProfiles[userId] = createStudentProfile(user);
   }
-  return studentProfiles[currentUserId];
+  return studentProfiles[userId];
+};
+
+const recalculateProfileReadiness = (profile: StudentProfile) => {
+  const averageProficiency = profile.skills.length
+    ? profile.skills.reduce((total, skill) => total + skill.proficiency, 0) / profile.skills.length
+    : 0;
+  profile.placementReadiness.breakdown.technicalSkills = Math.round(averageProficiency * 20);
+  profile.placementReadiness.breakdown.projectsPortfolio = Math.min(100, profile.projects.length * 25);
+  profile.placementReadiness.breakdown.resumeAtsQuality = profile.atsScore || 0;
+  profile.placementReadiness.breakdown.marketAlignment = jobs.length && profile.skills.length
+    ? Math.round(jobs.reduce((total, job) => total + calculateLocalSemanticMatch(profile, job).overallMatch, 0) / jobs.length)
+    : 0;
+  const breakdown = profile.placementReadiness.breakdown;
+  profile.placementReadiness.overall = Math.round(
+    breakdown.technicalSkills * 0.35 +
+    breakdown.projectsPortfolio * 0.25 +
+    breakdown.resumeAtsQuality * 0.2 +
+    breakdown.mockInterviewPerformance * 0.15 +
+    breakdown.marketAlignment * 0.05
+  );
+  return profile;
 };
 
 // ==========================================
@@ -92,63 +240,109 @@ const getActiveStudentProfile = (): StudentProfile => {
 
 // Get current logged-in user
 app.get('/api/auth/current-user', (req, res) => {
-  const user = getCurrentUser();
+  const userId = getSessionUserId(req);
+  const user = users.find(candidate => candidate.id === userId) || null;
   res.json({
     user,
     hasGeminiKey: hasGeminiKey(),
   });
 });
 
-// Switch role / active demo persona
-app.post('/api/auth/switch-user', (req, res) => {
-  const { userId } = req.body;
-  const found = users.find(u => u.id === userId);
-  if (found) {
-    currentUserId = found.id;
-    return res.json({ success: true, user: found });
-  }
-  res.status(404).json({ error: 'User not found' });
+app.get('/api/auth/config', (_req, res) => {
+  res.json({ clientId: GOOGLE_CLIENT_ID || null });
 });
 
-// Google OAuth 2.0 login / profile creation
-app.post('/api/auth/google', (req, res) => {
-  const { email, name, avatarUrl, role } = req.body;
-  if (!email || !name) {
-    return res.status(400).json({ error: 'Email and name are required' });
-  }
+app.post('/api/auth/logout', (_req, res) => {
+  res.setHeader('Set-Cookie', 'nexus_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+  res.json({ success: true });
+});
 
-  let existing = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  if (existing) {
-    if (role && ['student', 'recruiter', 'admin'].includes(role)) {
-      existing.role = role;
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(503).json({ error: 'Google sign-in is not configured on the server' });
     }
-    currentUserId = existing.id;
-    return res.json({ success: true, user: existing, isNew: false });
+
+    const { credential } = req.body;
+    if (typeof credential !== 'string' || !credential) {
+      return res.status(400).json({ error: 'Google credential is required' });
+    }
+
+    let identity;
+    try {
+      const ticket = await googleAuthClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+      identity = ticket.getPayload();
+    } catch {
+      return res.status(401).json({ error: 'Google credential could not be verified' });
+    }
+    if (!identity?.sub || !identity.email || identity.email_verified !== true) {
+      return res.status(401).json({ error: 'Google account verification failed' });
+    }
+
+    const userId = `google_${identity.sub}`;
+    const normalizedEmail = identity.email.toLowerCase();
+    const assignedRole = ADMIN_EMAILS.has(normalizedEmail)
+      ? 'admin'
+      : RECRUITER_EMAILS.has(normalizedEmail)
+        ? 'recruiter'
+        : 'student';
+    let user = users.find(candidate => candidate.id === userId);
+    const isNew = !user;
+    if (user) {
+      user.name = identity.name || user.name;
+      user.avatarUrl = identity.picture || user.avatarUrl;
+      user.role = assignedRole;
+    } else {
+      user = {
+        id: userId,
+        email: identity.email,
+        name: identity.name || identity.email,
+        avatarUrl: identity.picture || '',
+        role: assignedRole,
+        createdAt: new Date().toISOString(),
+      };
+      users.push(user);
+    }
+
+    await saveUser(user);
+    if (assignedRole === 'student' && !studentProfiles[user.id]) {
+      studentProfiles[user.id] = createStudentProfile(user);
+      await saveStudentProfile(user.id, studentProfiles[user.id]);
+    }
+    setSessionCookie(res, user.id);
+    res.json({ success: true, user, isNew });
+  } catch (error) {
+    console.error('Google sign-in verification failed:', error);
+    res.status(502).json({ error: 'Unable to verify your Google account right now' });
+  }
+});
+
+app.use('/api', (req, res, next) => {
+  const userId = getSessionUserId(req);
+  const user = users.find(candidate => candidate.id === userId);
+  if (!user) {
+    return res.status(401).json({ error: 'Sign in with Google to continue' });
   }
 
-  const newUser: User = {
-    id: `user_${Date.now()}`,
-    email,
-    name,
-    avatarUrl: avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
-    role: role || 'student',
-    createdAt: new Date().toISOString(),
-  };
-
-  users.push(newUser);
-  currentUserId = newUser.id;
-
-  // Initialize student profile if role is student
-  if (newUser.role === 'student') {
-    studentProfiles[newUser.id] = {
-      ...SEED_STUDENT_PROFILE,
-      id: `student_${newUser.id}`,
-      userId: newUser.id,
-      headline: `${newUser.name} · Student`,
-    };
+  const routePath = req.originalUrl.split('?')[0];
+  const requiredRole = routePath.startsWith('/api/admin/')
+    ? 'admin'
+    : routePath.startsWith('/api/recruiter/')
+      ? 'recruiter'
+      : routePath.startsWith('/api/student/')
+        ? 'student'
+        : null;
+  if (requiredRole && user.role !== requiredRole) {
+    return res.status(403).json({ error: 'Your account role cannot access this resource' });
+  }
+  if (user.role === 'admin' && !ADMIN_EMAILS.has(user.email.toLowerCase())) {
+    return res.status(403).json({ error: 'This account is not authorized for administration' });
+  }
+  if (user.role === 'recruiter' && !RECRUITER_EMAILS.has(user.email.toLowerCase())) {
+    return res.status(403).json({ error: 'This account is not authorized for recruiting' });
   }
 
-  res.json({ success: true, user: newUser, isNew: true });
+  requestUserStorage.run(user.id, next);
 });
 
 // ==========================================
@@ -164,9 +358,14 @@ app.get('/api/student/profile', (req, res) => {
 // Update student profile
 app.put('/api/student/profile', (req, res) => {
   const profile = getActiveStudentProfile();
-  const updated = { ...profile, ...req.body };
-  studentProfiles[currentUserId] = updated;
-  res.json(updated);
+  const updated = recalculateProfileReadiness({ ...profile, ...req.body, id: profile.id, userId: profile.userId });
+  studentProfiles[getActiveUserId()] = updated;
+  void saveStudentProfile(getActiveUserId(), updated)
+    .then(() => res.json(updated))
+    .catch(error => {
+      console.error('Profile save failed:', error);
+      res.status(500).json({ error: 'Could not save your profile' });
+    });
 });
 
 // Resume Upload & AI Extraction (Supports PDF, DOCX, TXT via pdfParse & Gemini multimodal)
@@ -177,33 +376,68 @@ app.post('/api/student/resume/parse', async (req, res) => {
 
     let processedText = resumeText || '';
 
-    // If PDF base64 is provided, extract readable text via pdf-parse
     if (fileBase64) {
       try {
         const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
-        const pdfBuffer = Buffer.from(cleanBase64, 'base64');
-        const parser = new PDFParse(new Uint8Array(pdfBuffer));
-        await parser.load();
-        const parsedPdf = await parser.getText();
-        if (parsedPdf && parsedPdf.text && parsedPdf.text.trim().length > 10) {
-          processedText = parsedPdf.text.trim();
+        const documentBuffer = Buffer.from(cleanBase64, 'base64');
+        if (documentBuffer.length > 18 * 1024 * 1024) {
+          return res.status(413).json({ error: 'Resume files must be 18 MB or smaller' });
         }
-      } catch (pdfErr) {
-        console.warn('pdf-parse extraction fallback notice:', pdfErr);
+
+        const extension = fileName.toLowerCase().split('.').pop();
+        if (extension === 'pdf') {
+          try {
+            const parser = new PDFParse(new Uint8Array(documentBuffer));
+            await parser.load();
+            const parsedPdf = await parser.getText();
+            if (parsedPdf?.text?.trim()) processedText = parsedPdf.text.trim();
+          } catch (pdfError) {
+            console.warn('PDF text extraction fallback:', pdfError);
+          }
+        } else if (extension === 'docx') {
+          const parsedDocx = await mammoth.extractRawText({ buffer: documentBuffer });
+          if (parsedDocx.value?.trim()) processedText = parsedDocx.value.trim();
+        } else if (extension === 'txt') {
+          processedText = documentBuffer.toString('utf8').trim();
+        } else {
+          return res.status(400).json({ error: 'Only PDF, DOCX, and TXT resumes are supported' });
+        }
+      } catch (parseError) {
+        console.warn('Resume document extraction failed:', parseError);
+        return res.status(422).json({ error: 'Could not read this document. Try a text-based PDF or DOCX file.' });
       }
     }
 
-    if (!processedText && !fileBase64) {
+    if (!processedText.trim() && !(fileBase64 && fileName.toLowerCase().endsWith('.pdf'))) {
       return res.status(400).json({ error: 'Resume text or document content required' });
     }
 
     let parsedResult = null;
+    const geminiConfigured = hasGeminiKey();
+    const activeProfile = getActiveStudentProfile();
+    let nlpResult = activeProfile;
+    let geminiUsed = false;
+    if (processedText.trim()) {
+      nlpResult = parseResumeWithNlp(processedText, skills, activeProfile);
+      parsedResult = nlpResult;
+    }
 
-    if (hasGeminiKey()) {
+    if (geminiConfigured) {
+      let geminiResult = null;
       if (processedText && processedText.trim().length > 20) {
-        parsedResult = await parseResumeWithGemini(processedText, false);
-      } else if (fileBase64) {
-        parsedResult = await parseResumeWithGemini(fileBase64, true, mimeType);
+        geminiResult = await parseResumeWithGemini(processedText, false);
+      } else if (fileBase64 && fileName.toLowerCase().endsWith('.pdf')) {
+        geminiResult = await parseResumeWithGemini(fileBase64, true, mimeType);
+      }
+      if (geminiResult) {
+        geminiUsed = true;
+        parsedResult = {
+          ...nlpResult,
+          ...geminiResult,
+          skills: Array.isArray(geminiResult.skills) && geminiResult.skills.length
+            ? geminiResult.skills
+            : nlpResult.skills,
+        };
       }
     }
 
@@ -215,29 +449,30 @@ app.post('/api/student/resume/parse', async (req, res) => {
       profile.cgpa = parsedResult.cgpa || profile.cgpa;
       profile.targetRoles = parsedResult.targetRoles || profile.targetRoles;
       profile.bio = parsedResult.bio || profile.bio;
-      profile.atsScore = parsedResult.atsScore || 82;
+      profile.atsScore = parsedResult.atsScore ?? profile.atsScore;
 
       if (Array.isArray(parsedResult.skills) && parsedResult.skills.length > 0) {
-        profile.skills = parsedResult.skills.map((s: any, idx: number) => ({
+        const extractedSkills: StudentSkill[] = parsedResult.skills.map((s: any, idx: number) => ({
           id: `sk_parsed_${idx}`,
           skillId: `s_${s.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
           name: s.name,
           category: s.category || 'backend',
-          proficiency: Math.min(5, Math.max(1, s.proficiency || 4)),
+          proficiency: Math.min(5, Math.max(1, Number(s.proficiency) || 1)),
           verifiedBy: 'resume' as const,
-          yearsExperience: s.yearsExperience || 1.5,
+          yearsExperience: Number(s.yearsExperience) || 0,
         }));
+        const manualSkills = profile.skills.filter(skill => skill.verifiedBy === 'self');
+        const manualSkillNames = new Set(manualSkills.map(skill => skill.name.trim().toLowerCase()));
+        profile.skills = [
+          ...extractedSkills.filter(skill => !manualSkillNames.has(skill.name.trim().toLowerCase())),
+          ...manualSkills,
+        ];
       }
 
       if (parsedResult.education) profile.education = parsedResult.education;
       if (parsedResult.experience) profile.experience = parsedResult.experience;
       if (parsedResult.projects) profile.projects = parsedResult.projects;
       if (parsedResult.certifications) profile.certifications = parsedResult.certifications;
-    } else {
-      // Local fallback parsing
-      profile.resumeFileName = fileName;
-      profile.resumeLastUpdated = new Date().toISOString();
-      profile.atsScore = 85;
     }
 
     profile.resumeRawText = processedText || profile.resumeRawText || '';
@@ -245,17 +480,23 @@ app.post('/api/student/resume/parse', async (req, res) => {
     profile.resumeLastUpdated = new Date().toISOString();
 
     // Recalculate placement readiness
-    profile.placementReadiness.overall = Math.min(96, Math.max(70, Math.round(profile.skills.length * 4 + 40)));
-    profile.placementReadiness.breakdown.resumeAtsQuality = profile.atsScore;
+    recalculateProfileReadiness(profile);
 
-    studentProfiles[currentUserId] = profile;
-    modelMetrics.totalEmbeddingsComputed += 1;
+    studentProfiles[getActiveUserId()] = profile;
+    await saveStudentProfile(getActiveUserId(), profile);
 
     res.json({
       success: true,
       profile,
       extractedTextLength: processedText.length,
-      parsedViaGemini: Boolean(parsedResult),
+      parsedViaGemini: geminiUsed,
+      extractionMethod: geminiUsed ? 'gemini+nlp' : 'nlp',
+      geminiConfigured,
+      parsingMessage: processedText.trim()
+        ? geminiUsed
+          ? 'Local NLP extraction completed and Gemini enrichment was applied.'
+          : 'Local NLP extraction completed from the resume text.'
+        : 'Resume text was saved, but this document did not contain readable text for NLP extraction.',
     });
   } catch (err: any) {
     console.error('Error in resume parse endpoint:', err);
@@ -266,52 +507,108 @@ app.post('/api/student/resume/parse', async (req, res) => {
 // Career Role Recommendations
 app.get('/api/student/career-recommendations', (req, res) => {
   const profile = getActiveStudentProfile();
-  const studentSkillNames = new Set(profile.skills.map(s => s.name.toLowerCase()));
+  const recommendations = jobs.map(job => ({
+    title: job.title,
+    job,
+    matchScore: calculateLocalSemanticMatch(profile, job).overallMatch,
+    demandLevel: 'Based on active listings',
+    averageSalary: job.salaryRange,
+    openJobsCount: 1,
+    description: job.description,
+    topOverlappingSkills: job.requiredSkills.filter(required =>
+      profile.skills.some(skill => skill.name.toLowerCase() === required.toLowerCase())
+    ),
+    criticalMissingSkills: job.requiredSkills.filter(required =>
+      !profile.skills.some(skill => skill.name.toLowerCase() === required.toLowerCase())
+    ),
+  }));
+  res.json(recommendations.sort((a, b) => b.matchScore - a.matchScore));
+});
 
-  const roles = [
-    {
-      title: 'Full Stack Developer',
-      matchScore: 92,
-      demandLevel: 'Very High',
-      averageSalary: '$142,000',
-      openJobsCount: 4200,
-      description: 'End-to-end web engineering building responsive client UIs and robust distributed microservices.',
-      topOverlappingSkills: ['TypeScript', 'React', 'Node.js', 'PostgreSQL'],
-      criticalMissingSkills: ['Kafka', 'GraphQL'],
-    },
-    {
-      title: 'AI/ML Platform Engineer',
-      matchScore: 88,
-      demandLevel: 'Extreme',
-      averageSalary: '$165,000',
-      openJobsCount: 3100,
-      description: 'Developing semantic search, RAG pipelines, pgvector indices, and LLM inference backends.',
-      topOverlappingSkills: ['Python', 'FastAPI', 'pgvector', 'Docker'],
-      criticalMissingSkills: ['PyTorch', 'Model Quantization'],
-    },
-    {
-      title: 'Backend Systems Engineer',
-      matchScore: 85,
-      demandLevel: 'High',
-      averageSalary: '$148,000',
-      openJobsCount: 3800,
-      description: 'High-concurrency data persistence, caching topologies, API gateways, and system architecture.',
-      topOverlappingSkills: ['PostgreSQL', 'Redis', 'Docker', 'FastAPI'],
-      criticalMissingSkills: ['Kubernetes', 'Apache Kafka'],
-    },
-    {
-      title: 'Cloud & DevOps Engineer',
-      matchScore: 78,
-      demandLevel: 'High',
-      averageSalary: '$152,000',
-      openJobsCount: 2900,
-      description: 'Container orchestration, CI/CD automated deployments, infrastructure as code, and cloud monitoring.',
-      topOverlappingSkills: ['Docker', 'AWS', 'Git & GitHub Actions'],
-      criticalMissingSkills: ['Kubernetes', 'Terraform'],
-    },
-  ];
+app.get('/api/student/evidence-map', (req, res) => {
+  const profile = getActiveStudentProfile();
+  const sectionLines: Array<{ text: string; section: 'skills' | 'experience' | 'projects' | 'other' }> = [];
+  let section: 'skills' | 'experience' | 'projects' | 'other' = 'other';
 
-  res.json(roles);
+  for (const rawLine of (profile.resumeRawText || '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const heading = line.toLowerCase().replace(/[:|\-]+$/, '').trim();
+    if (/^(technical\s+)?skills$|^core competencies$|^technologies$/.test(heading)) {
+      section = 'skills';
+      continue;
+    }
+    if (/^(work\s+)?experience$|^professional experience$|^employment$|^internships$/.test(heading)) {
+      section = 'experience';
+      continue;
+    }
+    if (/^(selected\s+)?projects$|^academic projects$|^personal projects$/.test(heading)) {
+      section = 'projects';
+      continue;
+    }
+    if (/^(education|certifications|certificates|summary|objective)$/.test(heading)) {
+      section = 'other';
+      continue;
+    }
+    sectionLines.push({ text: line, section });
+  }
+
+  const skillNames = new Map<string, string>();
+  for (const skill of profile.skills) skillNames.set(skill.name.trim().toLowerCase(), skill.name.trim());
+  for (const job of jobs) {
+    for (const skillName of [...job.requiredSkills, ...job.preferredSkills]) {
+      if (skillName.trim()) skillNames.set(skillName.trim().toLowerCase(), skillName.trim());
+    }
+  }
+
+  const containsSkill = (line: string, skillName: string) => {
+    const escaped = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, 'i').test(line);
+  };
+
+  const evidence = [...skillNames].map(([normalizedName, name]) => {
+    const profileSkill = profile.skills.find(skill => skill.name.trim().toLowerCase() === normalizedName);
+    const experienceLines = sectionLines
+      .filter(item => item.section === 'experience' && containsSkill(item.text, name))
+      .map(item => item.text.slice(0, 240));
+    const projectLines = sectionLines
+      .filter(item => item.section === 'projects' && containsSkill(item.text, name))
+      .map(item => item.text.slice(0, 240));
+    const skillSectionMentioned = sectionLines.some(item => item.section === 'skills' && containsSkill(item.text, name));
+    const evidenceLines = [...experienceLines, ...projectLines];
+    const requiredBy = jobs.filter(job => job.requiredSkills.some(skill => skill.trim().toLowerCase() === normalizedName));
+    const preferredByCount = jobs.filter(job => job.preferredSkills.some(skill => skill.trim().toLowerCase() === normalizedName)).length;
+    const status = evidenceLines.length
+      ? 'demonstrated'
+      : profileSkill || skillSectionMentioned
+        ? 'listed'
+        : 'gap';
+
+    return {
+      name,
+      status,
+      proficiency: profileSkill?.proficiency ?? null,
+      verifiedBy: profileSkill?.verifiedBy ?? null,
+      requiredByCount: requiredBy.length,
+      preferredByCount,
+      jobTitles: requiredBy.map(job => job.title),
+      experienceEvidence: experienceLines,
+      projectEvidence: projectLines,
+      mentionedInResumeSkills: skillSectionMentioned,
+    };
+  }).sort((left, right) => right.requiredByCount - left.requiredByCount || left.name.localeCompare(right.name));
+
+  res.json({
+    resumeFileName: profile.resumeFileName || null,
+    resumeLastUpdated: profile.resumeLastUpdated || null,
+    activeJobCount: jobs.length,
+    summary: {
+      demonstrated: evidence.filter(item => item.status === 'demonstrated').length,
+      listed: evidence.filter(item => item.status === 'listed').length,
+      gaps: evidence.filter(item => item.status === 'gap' && item.requiredByCount > 0).length,
+    },
+    skills: evidence,
+  });
 });
 
 // Job Recommendations with Explainable Semantic Matching
@@ -329,7 +626,10 @@ app.get('/api/student/job-matches', async (req, res) => {
         match = calculateLocalSemanticMatch(profile, job);
       }
       return {
-        job,
+        job: {
+          ...job,
+          applicantsCount: applications.filter(application => application.jobId === job.id).length,
+        },
         matchScore: match,
       };
     })
@@ -345,99 +645,69 @@ app.get('/api/student/job-matches', async (req, res) => {
 app.get('/api/student/skill-gap', (req, res) => {
   const profile = getActiveStudentProfile();
   const studentSkillMap = new Map(profile.skills.map(s => [s.name.toLowerCase(), s.proficiency]));
-
-  const gapAnalysis = [
-    {
-      skillName: 'Kubernetes',
-      category: 'devops',
+  const targetJobs = jobs.filter(job => profile.targetRoles.length === 0 || profile.targetRoles.includes(job.title));
+  const gaps = new Map<string, { skillName: string; targetRole: string; demand: number }>();
+  for (const job of targetJobs) {
+    for (const skillName of job.requiredSkills) {
+      if ((studentSkillMap.get(skillName.toLowerCase()) || 0) >= 3) continue;
+      const current = gaps.get(skillName) || { skillName, targetRole: job.title, demand: 0 };
+      current.demand += 1;
+      gaps.set(skillName, current);
+    }
+  }
+  res.json([...gaps.values()].map(gap => {
+    const catalogSkill = skills.find(skill => skill.name.toLowerCase() === gap.skillName.toLowerCase());
+    const missingPrerequisites = (catalogSkill?.prerequisites || []).filter(
+      prerequisite => (studentSkillMap.get(prerequisite.toLowerCase()) || 0) < 3
+    );
+    const difficulty = catalogSkill?.level === 'fundamental'
+      ? 'Beginner'
+      : catalogSkill?.level === 'advanced'
+        ? 'Advanced'
+        : catalogSkill?.level === 'intermediate'
+          ? 'Intermediate'
+          : 'Not assessed';
+    return {
+      ...gap,
+      category: catalogSkill?.category || 'uncategorized',
       importance: 'critical' as const,
-      targetRole: 'Full Stack & Backend Engineer',
-      studentCurrentLevel: studentSkillMap.get('kubernetes') || 0,
-      requiredLevel: 4,
-      learningDifficulty: 'Intermediate' as const,
-      estimatedHours: 20,
-      prerequisitesMet: true,
-      missingPrerequisites: [],
-    },
-    {
-      skillName: 'Apache Kafka',
-      category: 'backend',
-      importance: 'critical' as const,
-      targetRole: 'Backend Systems Engineer',
-      studentCurrentLevel: studentSkillMap.get('apache kafka') || 0,
-      requiredLevel: 4,
-      learningDifficulty: 'Advanced' as const,
-      estimatedHours: 25,
-      prerequisitesMet: true,
-      missingPrerequisites: [],
-    },
-    {
-      skillName: 'System Design & High Concurrency',
-      category: 'core_cs',
-      importance: 'important' as const,
-      targetRole: 'Senior/Mid Technical Interviews',
-      studentCurrentLevel: 2,
-      requiredLevel: 4,
-      learningDifficulty: 'Advanced' as const,
-      estimatedHours: 30,
-      prerequisitesMet: true,
-      missingPrerequisites: [],
-    },
-    {
-      skillName: 'GraphQL',
-      category: 'frontend',
-      importance: 'optional' as const,
-      targetRole: 'Full Stack Developer',
-      studentCurrentLevel: studentSkillMap.get('graphql') || 0,
+      studentCurrentLevel: studentSkillMap.get(gap.skillName.toLowerCase()) || 0,
       requiredLevel: 3,
-      learningDifficulty: 'Beginner' as const,
-      estimatedHours: 8,
-      prerequisitesMet: true,
-      missingPrerequisites: [],
-    },
-  ];
-
-  res.json(gapAnalysis);
+      learningDifficulty: difficulty,
+      estimatedHours: 0,
+      prerequisitesMet: missingPrerequisites.length === 0,
+      prerequisitesKnown: Boolean(catalogSkill),
+      missingPrerequisites,
+    };
+  }));
 });
 
 // Personalized Learning Roadmap
 app.get('/api/student/roadmap', (req, res) => {
-  const roadmap: RoadmapStep[] = [
-    {
-      stepNumber: 1,
-      phase: 'Phase 1: Event-Driven Distributed Systems',
-      estimatedWeeks: 2,
-      skillName: 'Apache Kafka',
-      importance: 'critical',
-      prerequisites: ['Docker', 'Node.js/Python'],
-      whyThisSkill: 'Essential for high-throughput stream processing demanded by top tier backend employers.',
-      recommendedCourses: [SEED_COURSES[2]],
-      recommendedProject: SEED_PROJECTS[0],
+  const profile = getActiveStudentProfile();
+  const ownedSkills = new Set(profile.skills.map(skill => skill.name.toLowerCase()));
+  const targetJobs = jobs.filter(job => profile.targetRoles.length === 0 || profile.targetRoles.includes(job.title));
+  const missingSkills = [...new Set(targetJobs.flatMap(job => job.requiredSkills))].filter(skill => !ownedSkills.has(skill.toLowerCase()));
+  const roadmap: RoadmapStep[] = missingSkills.slice(0, 6).map((skillName, index) => ({
+    stepNumber: index + 1,
+    phase: `Learning goal ${index + 1}`,
+    estimatedWeeks: 0,
+    skillName,
+    importance: 'critical',
+    prerequisites: [],
+    whyThisSkill: `Required by ${targetJobs.filter(job => job.requiredSkills.includes(skillName)).length} active job listing(s).`,
+    recommendedCourses: [],
+    recommendedProject: {
+      id: `practice_${skillName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+      title: `Build a project using ${skillName}`,
+      targetSkills: [skillName],
+      difficulty: 'Intermediate',
+      description: `Create and document a small, verifiable project that demonstrates practical use of ${skillName}.`,
+      keyDeliverables: ['Working implementation', 'README with setup and design decisions', 'Tests or validation steps'],
+      estimatedHours: 0,
+      portfolioImpact: `Demonstrates ${skillName} for relevant active listings.`,
     },
-    {
-      stepNumber: 2,
-      phase: 'Phase 2: Cloud Orchestration & Production SRE',
-      estimatedWeeks: 3,
-      skillName: 'Kubernetes & ArgoCD',
-      importance: 'critical',
-      prerequisites: ['Docker'],
-      whyThisSkill: 'Bridges the gap between local development and cloud-native container deployments.',
-      recommendedCourses: [SEED_COURSES[1]],
-      recommendedProject: SEED_PROJECTS[1],
-    },
-    {
-      stepNumber: 3,
-      phase: 'Phase 3: High-Scale Vector Retrieval & LLM Grounding',
-      estimatedWeeks: 2,
-      skillName: 'pgvector & RAG Optimization',
-      importance: 'important',
-      prerequisites: ['PostgreSQL', 'FastAPI'],
-      whyThisSkill: 'Direct differentiator for AI/ML platform engineer positions.',
-      recommendedCourses: [SEED_COURSES[3]],
-      recommendedProject: SEED_PROJECTS[2],
-    },
-  ];
-
+  }));
   res.json(roadmap);
 });
 
@@ -448,48 +718,14 @@ app.post('/api/student/ats-analyze', async (req, res) => {
     const profile = getActiveStudentProfile();
 
     const targetResume = resumeText || profile.resumeRawText || '';
-    const targetJD =
-      jobDescription ||
-      `Looking for a Full Stack Engineer proficient in TypeScript, React, Node.js, PostgreSQL, Docker, Kafka, and Kubernetes. Must have experience building scalable REST microservices and unit testing.`;
+    const targetJD = typeof jobDescription === 'string' ? jobDescription.trim() : '';
+    if (!targetResume.trim()) return res.status(400).json({ error: 'Upload or parse a resume before running ATS analysis' });
+    if (!targetJD) return res.status(400).json({ error: 'Paste a target job description before running ATS analysis' });
+    if (!hasGeminiKey()) return res.status(503).json({ error: 'ATS analysis requires a configured Gemini API key' });
 
-    if (hasGeminiKey()) {
-      const aiResult = await analyzeATSWithGemini(targetResume, targetJD);
-      if (aiResult) {
-        return res.json(aiResult);
-      }
-    }
-
-    // High quality rule-based fallback ATS analysis
-    res.json({
-      atsScore: 84,
-      formatHealthScore: 92,
-      keywordMatchScore: 78,
-      matchedKeywords: ['TypeScript', 'React', 'Node.js', 'PostgreSQL', 'Redis', 'Docker', 'RESTful APIs', 'CI/CD'],
-      missingKeywords: ['Kubernetes', 'Apache Kafka', 'Unit Testing (Jest/Vitest)', 'Agile/Scrum', 'Microservices'],
-      weakBulletPoints: [
-        {
-          original: 'Built microservices in Node.js and TypeScript handling daily events.',
-          critique: 'Missing concrete performance metrics and scale measurements.',
-          suggestion:
-            'Engineered high-throughput REST microservices in TypeScript, processing 1.2M daily events with sub-45ms p99 latency.',
-        },
-        {
-          original: 'Worked on database queries and improved speed.',
-          critique: 'Passive verb usage ("worked on") and unspecified optimization technique.',
-          suggestion:
-            'Optimized PostgreSQL query execution and instituted Redis multi-tier caching, reducing median response latency by 38%.',
-        },
-      ],
-      formatCritique: [
-        'Clean single-column layout correctly parsed by ATS crawlers.',
-        'Clear standard section headers (Education, Experience, Projects, Skills).',
-        'Recommend standardizing date formats to "MMM YYYY" throughout.',
-      ],
-      summaryStrengths: [
-        'Strong quantifiable impact metrics in work experience and featured projects.',
-        'High density of high-demand modern full-stack technologies.',
-      ],
-    });
+    const aiResult = await analyzeATSWithGemini(targetResume, targetJD);
+    if (!aiResult) return res.status(502).json({ error: 'Gemini could not analyze this resume right now' });
+    res.json(aiResult);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'ATS analysis failed' });
   }
@@ -500,54 +736,9 @@ app.post('/api/student/interview/start', async (req, res) => {
   try {
     const { targetRole = 'Full Stack Developer', questionType = 'technical' } = req.body;
     const profile = getActiveStudentProfile();
-
-    if (hasGeminiKey()) {
-      const questions = await generateInterviewQuestionsWithGemini(profile, targetRole, questionType);
-      if (questions && questions.length > 0) {
-        return res.json({ questions });
-      }
-    }
-
-    // Realistic fallback interview question bank
-    const questions = [
-      {
-        id: 'q_1',
-        type: 'technical',
-        category: 'Data Structures & Distributed Systems',
-        question:
-          'Explain how you would design an idempotent payment processing endpoint using PostgreSQL and Redis to handle concurrent requests without double-charging.',
-        expectedKeyConcepts: ['Idempotency key', 'Redis SETNX / distributed lock', 'PostgreSQL unique constraint', 'Database transaction (ACID)', 'Atomic write'],
-        difficulty: 'Challenging',
-      },
-      {
-        id: 'q_2',
-        type: 'technical',
-        category: 'Database & Vector Search',
-        question:
-          'How does pgvector perform approximate nearest neighbor (ANN) search, and what is the trade-off between IVFFlat and HNSW indexing structures?',
-        expectedKeyConcepts: ['Cosine distance', 'HNSW graph traversal', 'IVFFlat centroid clustering', 'Recall vs query latency trade-off', 'Memory overhead'],
-        difficulty: 'Challenging',
-      },
-      {
-        id: 'q_3',
-        type: 'system_design',
-        category: 'Architecture',
-        question:
-          'Walk me through the architecture of a high-throughput real-time telemetry monitoring platform like CloudPulse handling 50,000 WebSocket connections simultaneously.',
-        expectedKeyConcepts: ['WebSocket connection pooling', 'Redis Pub/Sub or Kafka', 'Horizontal scaling & load balancers', 'Event loop non-blocking I/O', 'Backpressure'],
-        difficulty: 'Expert',
-      },
-      {
-        id: 'q_4',
-        type: 'behavioral',
-        category: 'Engineering Culture & Conflict',
-        question:
-          'Describe a situation where you discovered a critical performance bottleneck or bug right before a production release deadline. How did you diagnose and resolve it?',
-        expectedKeyConcepts: ['Root cause analysis', 'Profiling / APM metrics', 'Clear stakeholder communication', 'Mitigation rollback / hotfix', 'Post-mortem learning'],
-        difficulty: 'Medium',
-      },
-    ];
-
+    if (!hasGeminiKey()) return res.status(503).json({ error: 'Mock interview requires a configured Gemini API key' });
+    const questions = await generateInterviewQuestionsWithGemini(profile, targetRole, questionType);
+    if (!questions?.length) return res.status(502).json({ error: 'Gemini could not generate interview questions right now' });
     res.json({ questions });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to start interview' });
@@ -563,41 +754,15 @@ app.post('/api/student/interview/evaluate', async (req, res) => {
       return res.status(400).json({ error: 'Please provide a substantive answer to evaluate.' });
     }
 
-    if (hasGeminiKey()) {
-      const evalResult = await evaluateInterviewAnswerWithGemini(
-        question,
-        expectedConcepts,
-        studentAnswer,
-        targetRole
-      );
-      if (evalResult) {
-        return res.json(evalResult);
-      }
-    }
-
-    // Comprehensive rule-based evaluation fallback
-    const answerLower = studentAnswer.toLowerCase();
-    const matched = expectedConcepts.filter((c: string) => answerLower.includes(c.toLowerCase()));
-    const missing = expectedConcepts.filter((c: string) => !answerLower.includes(c.toLowerCase()));
-
-    const conceptScore = Math.min(95, Math.max(55, Math.round((matched.length / (expectedConcepts.length || 1)) * 40 + 50)));
-
-    res.json({
-      score: conceptScore,
-      technicalCorrectness: conceptScore > 80 ? 88 : 72,
-      completeness: conceptScore > 75 ? 82 : 68,
-      communication: 88,
-      clarity: 85,
-      missingConcepts: missing.length > 0 ? missing : ['Edge case failure recovery with dead-letter queue'],
-      strengths: [
-        'Good structured articulation of the core architectural mechanism.',
-        'Demonstrated familiarity with production state and concurrency risks.',
-      ],
-      actionableFeedback:
-        'To elevate this from a good to an outstanding answer, explicitly mention transaction isolation levels and how you handle network timeout retries on the client.',
-      exemplaryAnswer:
-        'To guarantee idempotency, client requests provide a unique client-generated Idempotency-Key in headers. The API acquires a Redis distributed lease using SET key token NX EX 30. If the key exists, it returns a 409 In-Flight or the cached prior response. Inside a PostgreSQL transaction, we insert into an idempotent_requests table with a UNIQUE constraint, mutate state atomically, store the response payload, and commit. Finally, we update the Redis cache so subsequent duplicate requests immediately receive the cached response without touching application logic.',
-    });
+    if (!hasGeminiKey()) return res.status(503).json({ error: 'Answer evaluation requires a configured Gemini API key' });
+    const evalResult = await evaluateInterviewAnswerWithGemini(
+      question,
+      expectedConcepts,
+      studentAnswer,
+      targetRole
+    );
+    if (!evalResult) return res.status(502).json({ error: 'Gemini could not evaluate this answer right now' });
+    res.json(evalResult);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Evaluation failed' });
   }
@@ -605,47 +770,61 @@ app.post('/api/student/interview/evaluate', async (req, res) => {
 
 // Digital Twin Simulation ("What-If" Analysis)
 app.post('/api/student/digital-twin/simulate', (req, res) => {
-  const { newSkills = [] } = req.body;
+  const newSkills: string[] = Array.isArray(req.body.newSkills)
+    ? [...new Set<string>(req.body.newSkills.filter((skill: unknown): skill is string => typeof skill === 'string'))]
+    : [];
   const profile = getActiveStudentProfile();
-
-  const currentScore = profile.placementReadiness.overall;
-  // Each mastered target skill provides incremental readiness uplift
-  const boost = Math.min(12, newSkills.length * 3.5);
-  const simulatedScore = Math.min(98, Math.round(currentScore + boost));
+  const existingSkills = new Set(profile.skills.map(skill => skill.name.toLowerCase()));
+  const targetJobs = jobs.filter(job => profile.targetRoles.length === 0 || profile.targetRoles.includes(job.title));
+  const coverage = (additionalSkills: string[]) => {
+    const allSkills = new Set([...existingSkills, ...additionalSkills.map(skill => skill.toLowerCase())]);
+    const totalRequired = targetJobs.reduce((total, job) => total + job.requiredSkills.length, 0);
+    const matchingRequired = targetJobs.reduce(
+      (total, job) => total + job.requiredSkills.filter(skill => allSkills.has(skill.toLowerCase())).length,
+      0
+    );
+    return totalRequired ? Math.round((matchingRequired / totalRequired) * 100) : 0;
+  };
+  const currentScore = coverage([]);
+  const simulatedScore = coverage(newSkills);
 
   res.json({
     currentScore,
     simulatedScore,
-    boost: Math.round(boost),
-    simulatedPercentile: Math.min(99, profile.placementReadiness.percentileRank + Math.round(boost * 0.7)),
-    unlockedJobsCount: Math.min(jobs.length, Math.round(jobs.length * (simulatedScore / 100))),
-    impactAnalysis: `Adding ${newSkills.join(', ')} elevates your target role suitability into the top 5th percentile of university graduates, qualifying you for 100% of tier-1 developer infrastructure postings.`,
+    boost: Math.max(0, simulatedScore - currentScore),
+    unlockedJobsCount: targetJobs.filter(job => job.requiredSkills.every(skill =>
+      existingSkills.has(skill.toLowerCase()) || newSkills.some(newSkill => newSkill.toLowerCase() === skill.toLowerCase())
+    )).length,
+    impactAnalysis: targetJobs.length
+      ? `This scenario compares your current skills with required skills in ${targetJobs.length} active job posting(s). Coverage is a skills comparison, not a hiring probability.`
+      : 'There are no active job postings to compare yet. Add or apply against real job listings to use this simulation.',
   });
 });
 
 // Applications tracking
 app.get('/api/student/applications', (req, res) => {
-  res.json(applications.filter(a => a.studentId === 'student_alex'));
+  const profile = getActiveStudentProfile();
+  res.json(applications.filter(application => application.studentId === profile.id));
 });
 
-app.post('/api/student/applications', (req, res) => {
+app.post('/api/student/applications', async (req, res) => {
   const { jobId } = req.body;
   const job = jobs.find(j => j.id === jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
 
-  const existing = applications.find(a => a.jobId === jobId && a.studentId === 'student_alex');
+  const profile = getActiveStudentProfile();
+  const existing = applications.find(a => a.jobId === jobId && a.studentId === profile.id);
   if (existing) {
     return res.json({ success: true, application: existing, alreadyApplied: true });
   }
 
-  const profile = getActiveStudentProfile();
   const match = calculateLocalSemanticMatch(profile, job);
 
   const newApp: JobApplication = {
-    id: `app_${Date.now()}`,
+    id: `app_${Date.now()}_${randomBytes(4).toString('hex')}`,
     jobId,
-    studentId: 'student_alex',
-    studentName: profile.userId === 'user_alex' ? 'Alex Chen' : getCurrentUser().name,
+    studentId: profile.id,
+    studentName: getCurrentUser().name,
     studentEmail: getCurrentUser().email,
     appliedDate: new Date().toISOString(),
     status: 'Applied',
@@ -653,24 +832,28 @@ app.post('/api/student/applications', (req, res) => {
     studentReadinessScore: profile.placementReadiness.overall,
   };
 
+  try {
+    await saveApplication(newApp.id, jobId, getActiveUserId(), newApp.status, newApp);
+  } catch (error) {
+    console.error('Application save failed:', error);
+    return res.status(500).json({ error: 'Could not submit your application' });
+  }
   applications.unshift(newApp);
-  job.applicantsCount += 1;
+  job.applicantsCount = applications.filter(application => application.jobId === jobId).length;
 
   res.json({ success: true, application: newApp, alreadyApplied: false });
 });
 
 // Cancel / Withdraw job application
-app.delete('/api/student/applications/:idOrJobId', (req, res) => {
+app.delete('/api/student/applications/:idOrJobId', async (req, res) => {
   const { idOrJobId } = req.params;
+  const profile = getActiveStudentProfile();
   const index = applications.findIndex(
-    a => (a.id === idOrJobId || a.jobId === idOrJobId) && a.studentId === 'student_alex'
+    a => (a.id === idOrJobId || a.jobId === idOrJobId) && a.studentId === profile.id
   );
   if (index !== -1) {
     const appItem = applications[index];
-    const job = jobs.find(j => j.id === appItem.jobId);
-    if (job && job.applicantsCount > 0) {
-      job.applicantsCount -= 1;
-    }
+    await deleteApplication(appItem.id, getActiveUserId());
     applications.splice(index, 1);
     return res.json({
       success: true,
@@ -683,22 +866,25 @@ app.delete('/api/student/applications/:idOrJobId', (req, res) => {
 });
 
 // Recommendation feedback loop
-app.post('/api/student/recommendation-feedback', (req, res) => {
+app.post('/api/student/recommendation-feedback', async (req, res) => {
   const { jobId, rating, isHelpful, comments } = req.body;
-  feedbackList.push({
-    userId: currentUserId,
+  const feedback = {
+    id: `feedback_${Date.now()}_${randomBytes(4).toString('hex')}`,
+    userId: getActiveUserId(),
     jobId,
     rating,
     isHelpful,
     comments,
     timestamp: new Date().toISOString(),
-  });
-  modelMetrics.userFeedbackApprovalRate = Number(
-    ((modelMetrics.userFeedbackApprovalRate * modelMetrics.feedbackSampleCount + (isHelpful ? 100 : 0)) /
-      (modelMetrics.feedbackSampleCount + 1)).toFixed(1)
-  );
-  modelMetrics.feedbackSampleCount += 1;
-  res.json({ success: true });
+  };
+  try {
+    await saveFeedback(feedback.id, feedback.userId, feedback);
+    feedbackList.push(feedback);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Feedback save failed:', error);
+    res.status(500).json({ error: 'Could not save feedback' });
+  }
 });
 
 // ==========================================
@@ -706,13 +892,19 @@ app.post('/api/student/recommendation-feedback', (req, res) => {
 // ==========================================
 
 // Get recruiter jobs
-app.get('/api/recruiter/jobs', (req, res) => {
-  res.json(jobs);
+app.get('/api/recruiter/jobs', async (req, res) => {
+  const result = await database.query('SELECT data FROM career_app.jobs WHERE owner_id = $1 ORDER BY created_at DESC', [getActiveUserId()]);
+  const ownedJobs = result.rows.map(row => ({
+    ...row.data,
+    applicantsCount: applications.filter(application => application.jobId === row.data.id).length,
+  }));
+  res.json(ownedJobs);
 });
 
 // Create job posting
-app.post('/api/recruiter/jobs', (req, res) => {
+app.post('/api/recruiter/jobs', async (req, res) => {
   const {
+    companyName,
     title,
     location,
     workplaceType,
@@ -726,27 +918,40 @@ app.post('/api/recruiter/jobs', (req, res) => {
     minEducation,
   } = req.body;
 
+  if (!companyName?.trim() || !title?.trim() || !location?.trim() || !description?.trim() || !workplaceType || !employmentType || !experienceLevel) {
+    return res.status(400).json({ error: 'Company, title, location, workplace, employment type, experience level, and description are required' });
+  }
+  if (!Array.isArray(requiredSkills) || requiredSkills.length === 0) {
+    return res.status(400).json({ error: 'Add at least one required skill' });
+  }
+
   const newJob: Job = {
     id: `job_${Date.now()}`,
-    companyId: 'comp_user_org',
-    companyName: 'CloudScale Technologies',
-    companyLogo: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=100&auto=format&fit=crop&q=80',
-    title: title || 'Senior Software Engineer',
-    location: location || 'San Francisco, CA',
-    workplaceType: workplaceType || 'hybrid',
-    employmentType: employmentType || 'Full-time',
-    salaryRange: salaryRange || '$140,000 - $180,000',
-    experienceLevel: experienceLevel || 'Entry-level',
-    description: description || 'Exciting engineering opportunity building enterprise infrastructure.',
-    responsibilities: responsibilities || ['Build backend APIs', 'Design database schemas'],
-    requiredSkills: requiredSkills || ['TypeScript', 'Node.js', 'PostgreSQL'],
-    preferredSkills: preferredSkills || ['Docker', 'Redis'],
-    minEducation: minEducation || 'Bachelor degree in Computer Science or related field',
+    companyId: `company_${getActiveUserId()}`,
+    companyName: companyName.trim(),
+    companyLogo: '',
+    title: title.trim(),
+    location: location.trim(),
+    workplaceType,
+    employmentType,
+    salaryRange: salaryRange || 'Not specified',
+    experienceLevel,
+    description: description.trim(),
+    responsibilities: Array.isArray(responsibilities) ? responsibilities : [],
+    requiredSkills,
+    preferredSkills: Array.isArray(preferredSkills) ? preferredSkills : [],
+    minEducation: minEducation || '',
     postedAt: new Date().toISOString(),
     applicantsCount: 0,
   };
 
-  jobs.unshift(newJob);
+  try {
+    await saveJob(newJob.id, getActiveUserId(), newJob);
+    jobs.unshift(newJob);
+  } catch (error) {
+    console.error('Job save failed:', error);
+    return res.status(500).json({ error: 'Could not save this job posting' });
+  }
   res.json(newJob);
 });
 
@@ -759,124 +964,67 @@ app.post('/api/recruiter/jobs/analyze-jd', async (req, res) => {
     }
 
     if (hasGeminiKey()) {
-      const parsed = await analyzeJobDescriptionWithGemini(title || 'Software Engineer', 'Company', description);
+      const parsed = await analyzeJobDescriptionWithGemini(title || '', req.body.companyName || '', description);
       if (parsed) return res.json(parsed);
     }
-
-    // Fallback parser
-    res.json({
-      requiredSkills: ['TypeScript', 'Node.js', 'PostgreSQL', 'Docker'],
-      preferredSkills: ['Redis', 'FastAPI', 'Kubernetes', 'GraphQL'],
-      responsibilities: [
-        'Design and deploy resilient REST microservices',
-        'Optimize database queries and schema indices',
-        'Maintain automated test coverage and CI/CD pipelines',
-      ],
-      experienceLevel: 'Entry-level',
-      minEducation: 'B.S. in Computer Science or equivalent',
-      summary: 'High-impact software engineering role focusing on cloud backend scalability and data pipelines.',
-    });
+    res.status(hasGeminiKey() ? 502 : 503).json({ error: 'AI job-description analysis is unavailable; enter requirements manually' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to analyze JD' });
   }
 });
 
 // Recruiter AI Candidate Ranking
-app.get('/api/recruiter/jobs/:id/candidates', (req, res) => {
+app.get('/api/recruiter/jobs/:id/candidates', async (req, res) => {
   const jobId = req.params.id;
-  const job = jobs.find(j => j.id === jobId) || jobs[0];
-
-  // Candidates list derived from student profiles & seed candidates
-  const candidates = [
-    {
-      id: 'cand_alex',
-      name: 'Alex Chen',
-      email: 'hariesh.al23@bitsathy.ac.in',
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      degree: 'B.Tech AI & Data Science (2026)',
-      university: 'Bannari Amman Institute of Technology',
-      cgpa: 8.92,
-      skills: SEED_STUDENT_PROFILE.skills,
-      atsScore: 84,
-      readinessScore: 86,
-      status: 'Shortlisted',
-    },
-    {
-      id: 'cand_priya',
-      name: 'Priya Patel',
-      email: 'priya.patel@stanford.edu',
-      avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      degree: 'B.S. Computer Science (2026)',
-      university: 'Stanford University',
-      cgpa: 9.15,
-      skills: [
-        { name: 'Python', category: 'backend', proficiency: 5 },
-        { name: 'FastAPI', category: 'backend', proficiency: 5 },
-        { name: 'PostgreSQL', category: 'database', proficiency: 4 },
-        { name: 'Docker', category: 'devops', proficiency: 4 },
-        { name: 'pgvector', category: 'database', proficiency: 5 },
-      ],
-      atsScore: 91,
-      readinessScore: 93,
-      status: 'Interview',
-    },
-    {
-      id: 'cand_marcus',
-      name: 'Marcus Vance',
-      email: 'marcus.v@mit.edu',
-      avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-      degree: 'B.S. Electrical & CS (2025)',
-      university: 'MIT',
-      cgpa: 8.45,
-      skills: [
-        { name: 'Java', category: 'backend', proficiency: 4 },
-        { name: 'Spring Boot', category: 'backend', proficiency: 4 },
-        { name: 'Docker', category: 'devops', proficiency: 3 },
-      ],
-      atsScore: 76,
-      readinessScore: 78,
-      status: 'Applied',
-    },
-    {
-      id: 'cand_sophia',
-      name: 'Sophia Kim',
-      email: 'sophia.kim@berkeley.edu',
-      avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
-      degree: 'B.S. Data Science (2026)',
-      university: 'UC Berkeley',
-      cgpa: 8.8,
-      skills: [
-        { name: 'TypeScript', category: 'frontend', proficiency: 4 },
-        { name: 'React', category: 'frontend', proficiency: 4 },
-        { name: 'Tailwind CSS', category: 'frontend', proficiency: 5 },
-      ],
-      atsScore: 82,
-      readinessScore: 81,
-      status: 'Applied',
-    },
-  ];
-
-  // Compute semantic candidate match against this job
-  const rankedCandidates = candidates.map(c => {
-    const pseudoProfile: any = {
-      ...SEED_STUDENT_PROFILE,
-      skills: c.skills,
-      cgpa: c.cgpa,
-      projects: SEED_STUDENT_PROFILE.projects,
-    };
-    const match = calculateLocalSemanticMatch(pseudoProfile, job);
-    return {
-      ...c,
+  const jobResult = await database.query('SELECT data FROM career_app.jobs WHERE id = $1 AND owner_id = $2', [jobId, getActiveUserId()]);
+  if (!jobResult.rowCount) return res.status(404).json({ error: 'Job not found' });
+  const job: Job = jobResult.rows[0].data;
+  const applicants = applications.filter(application => application.jobId === jobId);
+  const rankedCandidates = applicants.flatMap(application => {
+    const profile = Object.values(studentProfiles).find(candidate => candidate.id === application.studentId);
+    if (!profile) return [];
+    const user = users.find(candidate => candidate.id === profile.userId);
+    if (!user) return [];
+    const match = calculateLocalSemanticMatch(profile, job);
+    return [{
+      id: user.id,
+      applicationId: application.id,
+      name: user.name,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+      headline: profile.headline,
+      degree: profile.degree,
+      university: profile.university,
+      cgpa: profile.cgpa,
+      skills: profile.skills,
+      atsScore: profile.atsScore,
+      readinessScore: profile.placementReadiness.overall,
+      profile: {
+        headline: profile.headline,
+        bio: profile.bio,
+        university: profile.university,
+        degree: profile.degree,
+        graduationYear: profile.graduationYear,
+        cgpa: profile.cgpa,
+        targetRoles: profile.targetRoles,
+        skills: profile.skills,
+        education: profile.education,
+        experience: profile.experience,
+        projects: profile.projects,
+        certifications: profile.certifications,
+        resumeFileName: profile.resumeFileName,
+        resumeLastUpdated: profile.resumeLastUpdated,
+        resumeRawText: profile.resumeRawText,
+      },
+      status: application.status,
       matchScore: match.overallMatch,
       skillMatchScore: match.skillMatch,
       matchedSkills: match.matchedSkills,
       missingCriticalSkills: match.missingSkills.critical,
       missingImportantSkills: match.missingSkills.important,
       whyRecommended: match.whyRecommended,
-    };
-  });
-
-  rankedCandidates.sort((a, b) => b.matchScore - a.matchScore);
+    }];
+  }).sort((a, b) => b.matchScore - a.matchScore);
 
   res.json({
     job,
@@ -886,16 +1034,18 @@ app.get('/api/recruiter/jobs/:id/candidates', (req, res) => {
 });
 
 // Update application status
-app.patch('/api/recruiter/applications/:id/status', (req, res) => {
+app.patch('/api/recruiter/applications/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status, notes } = req.body;
   const appItem = applications.find(a => a.id === id);
-  if (appItem) {
-    appItem.status = status;
-    if (notes) appItem.recruiterNotes = notes;
-    return res.json({ success: true, application: appItem });
-  }
-  res.json({ success: true, status });
+  const allowedStatuses = ['Reviewing', 'Shortlisted', 'Interview', 'Offer', 'Rejected'];
+  if (!appItem || !allowedStatuses.includes(status)) return res.status(404).json({ error: 'Application or status not found' });
+  const job = await database.query('SELECT 1 FROM career_app.jobs WHERE id = $1 AND owner_id = $2', [appItem.jobId, getActiveUserId()]);
+  if (!job.rowCount) return res.status(403).json({ error: 'You cannot update this application' });
+  appItem.status = status;
+  if (typeof notes === 'string') appItem.recruiterNotes = notes;
+  await saveApplication(appItem.id, appItem.jobId, appItem.studentId.replace(/^student_/, ''), status, appItem);
+  res.json({ success: true, application: appItem });
 });
 
 // ==========================================
@@ -903,22 +1053,40 @@ app.patch('/api/recruiter/applications/:id/status', (req, res) => {
 // ==========================================
 
 // Executive Placement Analytics
+app.get('/api/admin/jobs', (req, res) => {
+  res.json(jobs.map(job => ({
+    ...job,
+    applicantsCount: applications.filter(application => application.jobId === job.id).length,
+  })));
+});
+
 app.get('/api/admin/metrics', (req, res) => {
+  const students = users.filter(user => user.role === 'student').length;
+  const placedStudents = new Set(
+    applications.filter(application => application.status === 'Offer').map(application => application.studentId)
+  ).size;
+  const companies = new Map<string, { name: string; offersCount: number; jobsCount: number }>();
+  for (const job of jobs) {
+    const company = companies.get(job.companyName) || { name: job.companyName, offersCount: 0, jobsCount: 0 };
+    company.jobsCount += 1;
+    company.offersCount += applications.filter(application =>
+      application.jobId === job.id && application.status === 'Offer'
+    ).length;
+    companies.set(job.companyName, company);
+  }
   res.json({
-    placementRate: 94.2, // %
-    totalStudents: 1240,
-    placedStudents: 1168,
-    averageSalaryPackage: '$138,500',
-    highestSalaryPackage: '$210,000',
-    activeHiringCompanies: 64,
-    totalJobsPosted: jobs.length + 180,
-    topHiringCompanies: [
-      { name: 'Stripe', offersCount: 18, avgPackage: '$165,000' },
-      { name: 'Datadog', offersCount: 14, avgPackage: '$170,000' },
-      { name: 'Snowflake', offersCount: 12, avgPackage: '$175,000' },
-      { name: 'Anthropic', offersCount: 8, avgPackage: '$190,000' },
-      { name: 'Google Cloud', offersCount: 22, avgPackage: '$162,000' },
-    ],
+    placementRate: students ? Number(((placedStudents / students) * 100).toFixed(1)) : 0,
+    totalStudents: students,
+    placedStudents,
+    averageSalaryPackage: 'Not recorded',
+    highestSalaryPackage: 'Not recorded',
+    activeHiringCompanies: companies.size,
+    totalJobsPosted: jobs.length,
+    demoJobsCount: jobs.filter(job => job.isDemo).length,
+    topHiringCompanies: [...companies.values()]
+      .sort((a, b) => b.offersCount - a.offersCount || b.jobsCount - a.jobsCount)
+      .slice(0, 10)
+      .map(company => ({ ...company, avgPackage: 'Not recorded' })),
   });
 });
 
@@ -927,124 +1095,155 @@ app.get('/api/admin/skills', (req, res) => {
   res.json(skills);
 });
 
-app.post('/api/admin/skills', (req, res) => {
+app.post('/api/admin/skills', async (req, res) => {
   const { name, category, level, demandGrowthRate, prerequisites } = req.body;
+  if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Skill name is required' });
   const newSkill: SkillNode = {
-    id: `s_${Date.now()}`,
-    name,
+    id: `s_${Date.now()}_${randomBytes(3).toString('hex')}`,
+    name: name.trim(),
     category: category || 'backend',
     level: level || 'intermediate',
-    demandGrowthRate: demandGrowthRate || 25,
-    averageSalary: '$140,000',
+    demandGrowthRate: Number(demandGrowthRate) || 0,
+    averageSalary: 'Not recorded',
     prerequisites: prerequisites || [],
   };
+  await saveSkill(newSkill.id, newSkill);
   skills.push(newSkill);
   res.json(newSkill);
+});
+
+app.get('/api/student/skills', (req, res) => {
+  res.json(skills);
+});
+
+app.get('/api/student/skill-graph', (req, res) => {
+  res.json({
+    nodes: skills,
+    edges: skills.flatMap(skill => skill.prerequisites.map(prerequisite => ({
+      source: prerequisite,
+      target: skill.name,
+      relationshipType: 'prerequisite_of',
+      weight: 1,
+    }))),
+  });
 });
 
 app.get('/api/admin/skill-graph', (req, res) => {
   res.json({
     nodes: skills,
-    edges: SEED_SKILL_EDGES,
+    edges: skills.flatMap(skill => skill.prerequisites.map(prerequisite => ({
+      source: prerequisite,
+      target: skill.name,
+      relationshipType: 'prerequisite_of',
+      weight: 1,
+    }))),
   });
 });
 
 // Market Intelligence Trends
 app.get('/api/admin/market-intelligence', (req, res) => {
+  const demand = new Map<string, { skill: string; listings: number; roles: Set<string> }>();
+  for (const job of jobs) {
+    for (const skillName of [...new Set(job.requiredSkills)]) {
+      const item = demand.get(skillName) || { skill: skillName, listings: 0, roles: new Set<string>() };
+      item.listings += 1;
+      item.roles.add(job.title);
+      demand.set(skillName, item);
+    }
+  }
+  const maxListings = Math.max(1, ...[...demand.values()].map(item => item.listings));
+  const trends = [...demand.values()].map(item => ({
+    skill: item.skill,
+    category: skills.find(skill => skill.name.toLowerCase() === item.skill.toLowerCase())?.category || 'uncategorized',
+    demandIndex: Math.round((item.listings / maxListings) * 100),
+    growthYoY: 0,
+    openPositionsCount: item.listings,
+    trendDirection: 'stable',
+    topHiringRoles: [...item.roles],
+  }));
   res.json({
-    trends: marketTrends,
-    growingSkillsCount: marketTrends.filter(t => t.trendDirection === 'up').length,
-    decliningSkillsCount: marketTrends.filter(t => t.trendDirection === 'down').length,
+    trends,
+    growingSkillsCount: 0,
+    decliningSkillsCount: 0,
+    source: 'active job postings in this workspace',
   });
 });
 
 // AI Model Evaluation Metrics
 app.get('/api/admin/ai-model-eval', (req, res) => {
-  res.json(modelMetrics);
-});
-
-// PostgreSQL Database Schema Inspector & SQL Console
-app.post('/api/admin/sql', (req, res) => {
-  const { query } = req.body;
-  const q = (query || '').trim().toLowerCase();
-
-  if (q.includes('select * from skills')) {
-    return res.json({
-      columns: ['id', 'name', 'category', 'level', 'demand_growth_rate'],
-      rows: skills.slice(0, 15).map(s => [s.id, s.name, s.category, s.level, `${s.demandGrowthRate}%`]),
-      rowCount: skills.length,
-      executionTimeMs: 4.2,
-    });
-  }
-
-  if (q.includes('select * from jobs')) {
-    return res.json({
-      columns: ['id', 'company_name', 'title', 'location', 'salary_range', 'applicants_count'],
-      rows: jobs.map(j => [j.id, j.companyName, j.title, j.location, j.salaryRange, j.applicantsCount]),
-      rowCount: jobs.length,
-      executionTimeMs: 3.8,
-    });
-  }
-
-  if (q.includes('select * from users')) {
-    return res.json({
-      columns: ['id', 'email', 'name', 'role', 'created_at'],
-      rows: users.map(u => [u.id, u.email, u.name, u.role, u.createdAt]),
-      rowCount: users.length,
-      executionTimeMs: 2.1,
-    });
-  }
-
-  if (q.includes('schema') || q.includes('create table')) {
-    return res.json({
-      columns: ['table_name', 'column_count', 'table_type'],
-      rows: [
-        ['users', 6, 'BASE TABLE'],
-        ['students', 12, 'BASE TABLE'],
-        ['recruiters', 5, 'BASE TABLE'],
-        ['companies', 7, 'BASE TABLE'],
-        ['resumes', 8, 'BASE TABLE (with vector embedding)'],
-        ['skills', 6, 'BASE TABLE (with vector embedding)'],
-        ['student_skills', 6, 'BASE TABLE'],
-        ['skill_relationships', 5, 'BASE TABLE (DAG graph)'],
-        ['jobs', 15, 'BASE TABLE (with vector embedding)'],
-        ['job_skills', 3, 'BASE TABLE'],
-        ['courses', 8, 'BASE TABLE'],
-        ['projects', 7, 'BASE TABLE'],
-        ['recommendations', 11, 'BASE TABLE'],
-        ['applications', 5, 'BASE TABLE'],
-        ['feedback', 6, 'BASE TABLE'],
-        ['interviews', 8, 'BASE TABLE'],
-        ['market_data', 7, 'BASE TABLE'],
-      ],
-      rowCount: 17,
-      executionTimeMs: 1.8,
-    });
-  }
-
-  // Default simulated execution output
+  const feedbackSampleCount = feedbackList.length;
+  const positiveFeedbackCount = feedbackList.filter(feedback => feedback.isHelpful).length;
   res.json({
-    columns: ['status', 'message', 'tables_available'],
-    rows: [
-      [
-        'SUCCESS',
-        'PostgreSQL Query Executed successfully with pgvector support enabled.',
-        '17 Tables indexed: users, students, recruiters, companies, resumes, skills, student_skills, skill_relationships, jobs, job_skills, courses, projects, recommendations, applications, feedback, interviews, market_data',
-      ],
-    ],
-    rowCount: 1,
-    executionTimeMs: 5.4,
+    totalEmbeddingsComputed: 0,
+    averageLatencyMs: 0,
+    semanticMatchAccuracyRate: 0,
+    cosineDistribution: [],
+    userFeedbackApprovalRate: feedbackSampleCount
+      ? Number(((positiveFeedbackCount / feedbackSampleCount) * 100).toFixed(1))
+      : 0,
+    feedbackSampleCount,
   });
 });
 
-app.get('/api/admin/schema-sql', (req, res) => {
-  res.type('text/plain').send(POSTGRES_SCHEMA_SQL);
+// PostgreSQL Database Schema Inspector & SQL Console
+app.post('/api/admin/sql', async (req, res) => {
+  const query = typeof req.body.query === 'string' ? req.body.query.trim() : '';
+  const normalized = query.replace(/;\s*$/, '');
+  if (!/^\s*(select|with)\b/i.test(normalized) || normalized.includes(';')) {
+    return res.status(400).json({ error: 'Only a single read-only SELECT or WITH query is allowed' });
+  }
+
+  const client = await database.connect();
+  const startedAt = Date.now();
+  try {
+    await client.query('BEGIN READ ONLY');
+    await client.query("SET LOCAL statement_timeout = '5s'");
+    await client.query('SET LOCAL search_path TO career_app, public');
+    const result = await client.query<Record<string, unknown>>(normalized);
+    await client.query('COMMIT');
+    res.json({
+      columns: result.fields.map(field => field.name),
+      rows: result.rows.slice(0, 200).map(row => result.fields.map(field => row[field.name])),
+      rowCount: result.rowCount,
+      executionTimeMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    const message = error instanceof Error ? error.message : 'Query failed';
+    res.status(400).json({ error: message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/admin/schema-sql', async (req, res) => {
+  try {
+    const result = await database.query(
+      'SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = $1 ORDER BY table_name, ordinal_position',
+      ['career_app']
+    );
+    const tables = new Map<string, string[]>();
+    for (const row of result.rows) {
+      const columns = tables.get(row.table_name) || [];
+      columns.push(`  ${row.column_name} ${row.data_type}`);
+      tables.set(row.table_name, columns);
+    }
+    res.type('text/plain').send([...tables].map(([table, columns]) => `TABLE ${table}\n${columns.join('\n')}`).join('\n\n'));
+  } catch (error) {
+    console.error('Schema inspection failed:', error);
+    res.status(500).type('text/plain').send('Could not inspect the application schema');
+  }
 });
 
 // ==========================================
 // 5. VITE INTEGRATION / SPA SERVING
 // ==========================================
 async function startServer() {
+  await initializeStorage();
+  await seedDemoJobs();
+  await loadPersistentState();
+  await synchronizeAllowlistedRoles();
+
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static('dist'));
     app.get('*', (req, res) => {

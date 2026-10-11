@@ -12,7 +12,7 @@ export const PostgresSqlConsole: React.FC = () => {
     { label: 'All Skills', sql: 'SELECT * FROM skills LIMIT 10;' },
     { label: 'Active Jobs', sql: 'SELECT * FROM jobs LIMIT 10;' },
     { label: 'Users & Roles', sql: 'SELECT * FROM users;' },
-    { label: 'List All 17 Tables', sql: 'SELECT * FROM information_schema.tables WHERE table_schema = \'public\';' },
+    { label: 'List App Tables', sql: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'career_app' ORDER BY table_name;" },
   ];
 
   const runQuery = async (queryToRun = query) => {
@@ -54,7 +54,7 @@ export const PostgresSqlConsole: React.FC = () => {
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Live relational database inspector with pgvector similarity extensions and 17 tables.
+            Live read-only SQL access to this application's Supabase PostgreSQL schema.
           </p>
         </div>
 
@@ -77,7 +77,7 @@ export const PostgresSqlConsole: React.FC = () => {
                 : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
-            Inspect Schema DDL (17 Tables)
+            Inspect Application Schema
           </button>
         </div>
       </div>
@@ -171,7 +171,7 @@ export const PostgresSqlConsole: React.FC = () => {
         <div className="space-y-3">
           <div className="flex justify-between items-center text-xs text-slate-500">
             <span>Official PostgreSQL DDL definition for all 17 system entities</span>
-            <span className="font-semibold text-indigo-600">pgvector extension enabled</span>
+            <span className="font-semibold text-indigo-600">Read-only transaction</span>
           </div>
           <pre className="p-4 rounded-xl bg-slate-900 text-slate-200 font-mono text-xs overflow-x-auto max-h-96 leading-relaxed">
             {schemaSql || 'Loading schema...'}

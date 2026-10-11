@@ -65,11 +65,9 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({ currentU
               </span>
             </div>
             <p className="text-xs text-slate-600 font-medium mt-0.5">
-              Senior Technical Talent Acquisition · CloudScale Technologies
+              Recruiter workspace
             </p>
             <div className="flex items-center space-x-2 text-[11px] text-slate-500 mt-1">
-              <span>San Francisco HQ</span>
-              <span>·</span>
               <span>{jobs.length} Active Job Listings</span>
             </div>
           </div>

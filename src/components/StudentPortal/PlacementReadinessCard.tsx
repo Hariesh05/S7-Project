@@ -29,7 +29,7 @@ export const PlacementReadinessCard: React.FC<PlacementReadinessCardProps> = ({
           <div className="flex items-center space-x-2">
             <h2 className="text-lg font-bold text-slate-900">Placement Readiness Score</h2>
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-              Top {100 - percentileRank}% of Cohort
+              {overall ? 'Based on your saved profile' : 'Add profile data to establish a baseline'}
             </span>
           </div>
           <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1">
@@ -67,11 +67,11 @@ export const PlacementReadinessCard: React.FC<PlacementReadinessCardProps> = ({
 
           <div className="text-left">
             <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</div>
-            <div className="text-sm font-bold text-emerald-600 flex items-center space-x-1">
+            <div className={`text-sm font-bold flex items-center space-x-1 ${overall ? 'text-emerald-600' : 'text-slate-500'}`}>
               <Award className="w-4 h-4" />
-              <span>Campus Interview Ready</span>
+              <span>{overall ? 'Profile baseline available' : 'Profile incomplete'}</span>
             </div>
-            <div className="text-xs text-slate-500">Benchmark: 80+ for Tier-1</div>
+            <div className="text-xs text-slate-500">Not a hiring probability</div>
           </div>
         </div>
       </div>

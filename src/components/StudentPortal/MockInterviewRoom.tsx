@@ -19,7 +19,7 @@ interface MockInterviewRoomProps {
 }
 
 export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile }) => {
-  const [targetRole, setTargetRole] = useState('Full Stack Developer');
+  const [targetRole, setTargetRole] = useState(profile.targetRoles[0] || '');
   const [questionType, setQuestionType] = useState('technical');
   const [questions, setQuestions] = useState<MockInterviewQuestion[]>([]);
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0);
@@ -27,10 +27,12 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
   const [evaluating, setEvaluating] = useState(false);
   const [evaluation, setEvaluation] = useState<InterviewEvaluation | null>(null);
   const [loadingQuestions, setLoadingQuestions] = useState(false);
+  const [error, setError] = useState('');
 
   // Load questions
   const handleStartInterview = async () => {
     setLoadingQuestions(true);
+    setError('');
     setEvaluation(null);
     setUserAnswer('');
     try {
@@ -40,10 +42,11 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
         body: JSON.stringify({ targetRole, questionType }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not start interview');
       setQuestions(data.questions || []);
       setActiveQuestionIdx(0);
     } catch (err) {
-      console.error('Failed to start interview:', err);
+      setError(err instanceof Error ? err.message : 'Could not start interview');
     } finally {
       setLoadingQuestions(false);
     }
@@ -52,6 +55,7 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
   const handleEvaluate = async () => {
     if (!userAnswer.trim()) return;
     setEvaluating(true);
+    setError('');
     try {
       const currentQ = questions[activeQuestionIdx];
       const res = await fetch('/api/student/interview/evaluate', {
@@ -65,9 +69,10 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
         }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not evaluate answer');
       setEvaluation(data);
     } catch (err) {
-      console.error('Evaluation error:', err);
+      setError(err instanceof Error ? err.message : 'Could not evaluate answer');
     } finally {
       setEvaluating(false);
     }
@@ -104,7 +109,7 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
 
           <button
             onClick={handleStartInterview}
-            disabled={loadingQuestions}
+            disabled={loadingQuestions || !targetRole.trim()}
             className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs flex items-center justify-center space-x-2 shadow-xs transition-colors disabled:opacity-50"
           >
             {loadingQuestions ? (
@@ -121,22 +126,21 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
           </button>
         </div>
 
+        {error && <p role="alert" className="mt-4 text-xs text-rose-700">{error}</p>}
+
         {/* Options */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
               Target Interview Role
             </label>
-            <select
+            <input
+              type="text"
+              placeholder="Enter the role you are preparing for"
               value={targetRole}
               onChange={e => setTargetRole(e.target.value)}
               className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-            >
-              <option value="Full Stack Developer">Full Stack Developer</option>
-              <option value="AI/ML Platform Engineer">AI/ML Platform Engineer</option>
-              <option value="Backend Systems Engineer">Backend Systems Engineer</option>
-              <option value="Cloud & DevOps Engineer">Cloud & DevOps Engineer</option>
-            </select>
+            />
           </div>
 
           <div>
@@ -225,17 +229,6 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
               <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                 Your Spoken or Written Response:
               </label>
-              <button
-                type="button"
-                onClick={() =>
-                  setUserAnswer(
-                    'To prevent double payment charging, we issue an Idempotency-Key from the client. The backend uses a Redis SET key NX lock to acquire a 30s exclusive execution window. Inside a PostgreSQL atomic transaction, we insert into idempotent_requests with a UNIQUE constraint, mutate account balances, record the receipt, and commit. Finally, we cache the success response so duplicate retries return immediately without executing state changes.'
-                  )
-                }
-                className="text-[11px] text-indigo-600 font-semibold hover:underline"
-              >
-                Insert Sample Answer
-              </button>
             </div>
 
             <textarea
@@ -299,7 +292,7 @@ export const MockInterviewRoom: React.FC<MockInterviewRoomProps> = ({ profile })
                   </div>
                   <div>
                     <h4 className="text-sm font-bold text-slate-900">Comprehensive Answer Score</h4>
-                    <span className="text-xs text-slate-500">Benchmark: 80+ qualifies for onsite rounds</span>
+                    <span className="text-xs text-slate-500">Evaluation of this answer</span>
                   </div>
                 </div>
 

@@ -17,45 +17,16 @@ interface ATSScannerProps {
 }
 
 export const ATSScanner: React.FC<ATSScannerProps> = ({ profile }) => {
-  const [jobDescription, setJobDescription] = useState(
-    `Looking for a Full Stack Engineer proficient in TypeScript, React, Node.js, PostgreSQL, Docker, Kafka, and Kubernetes. Must have experience building scalable REST microservices and unit testing with Jest.`
-  );
+  const [jobDescription, setJobDescription] = useState('');
   const [resumeText, setResumeText] = useState(profile.resumeRawText || '');
   const [isScanning, setIsScanning] = useState(false);
-  const [analysis, setAnalysis] = useState<ATSAnalysisResult | null>({
-    atsScore: 84,
-    formatHealthScore: 92,
-    keywordMatchScore: 78,
-    matchedKeywords: ['TypeScript', 'React', 'Node.js', 'PostgreSQL', 'Redis', 'Docker', 'RESTful APIs', 'CI/CD'],
-    missingKeywords: ['Kubernetes', 'Apache Kafka', 'Unit Testing (Jest/Vitest)', 'Agile/Scrum', 'Microservices'],
-    weakBulletPoints: [
-      {
-        original: 'Built microservices in Node.js and TypeScript handling daily events.',
-        critique: 'Missing concrete scale measurements and latency benchmarks.',
-        suggestion:
-          'Engineered high-throughput REST microservices in TypeScript, processing 1.2M daily events with sub-45ms p99 latency.',
-      },
-      {
-        original: 'Worked on database queries and improved speed.',
-        critique: 'Passive verb ("worked on") and unspecified optimization mechanism.',
-        suggestion:
-          'Optimized PostgreSQL query execution and instituted Redis multi-tier caching, reducing median response latency by 38%.',
-      },
-    ],
-    formatCritique: [
-      'Clean single-column layout correctly parsed by ATS crawlers.',
-      'Clear standard section headers (Education, Experience, Projects, Skills).',
-      'Recommend standardizing date formats to "MMM YYYY" throughout.',
-    ],
-    summaryStrengths: [
-      'Strong quantifiable impact metrics in work experience and featured projects.',
-      'High density of high-demand modern full-stack technologies.',
-    ],
-  });
+  const [analysis, setAnalysis] = useState<ATSAnalysisResult | null>(null);
+  const [error, setError] = useState('');
 
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   const handleScan = async () => {
+    setError('');
     setIsScanning(true);
     try {
       const res = await fetch('/api/student/ats-analyze', {
@@ -67,9 +38,10 @@ export const ATSScanner: React.FC<ATSScannerProps> = ({ profile }) => {
         }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ATS analysis failed');
       setAnalysis(data);
     } catch (err) {
-      console.error('ATS scan error:', err);
+      setError(err instanceof Error ? err.message : 'ATS analysis failed');
     } finally {
       setIsScanning(false);
     }
@@ -100,7 +72,7 @@ export const ATSScanner: React.FC<ATSScannerProps> = ({ profile }) => {
 
           <button
             onClick={handleScan}
-            disabled={isScanning}
+            disabled={isScanning || !jobDescription.trim() || !(resumeText || profile.resumeRawText || '').trim()}
             className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center justify-center space-x-2 shadow-xs transition-colors disabled:opacity-50"
           >
             {isScanning ? (
@@ -116,6 +88,7 @@ export const ATSScanner: React.FC<ATSScannerProps> = ({ profile }) => {
             )}
           </button>
         </div>
+        {error && <p role="alert" className="mt-4 text-xs text-rose-700">{error}</p>}
 
         {/* Inputs */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6">
@@ -128,7 +101,7 @@ export const ATSScanner: React.FC<ATSScannerProps> = ({ profile }) => {
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               className="w-full text-xs p-3 rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-              placeholder="Paste job posting here..."
+              placeholder="Paste a real job description to compare against your resume..."
             />
           </div>
 
@@ -148,6 +121,11 @@ export const ATSScanner: React.FC<ATSScannerProps> = ({ profile }) => {
       </div>
 
       {/* Analysis Results View */}
+      {!analysis && !isScanning && !error && (
+        <p className="py-8 text-center text-sm text-slate-500">
+          Upload a resume and paste a target job description to generate a personalized ATS analysis.
+        </p>
+      )}
       {analysis && (
         <div className="space-y-6">
           {/* Score Gauges */}

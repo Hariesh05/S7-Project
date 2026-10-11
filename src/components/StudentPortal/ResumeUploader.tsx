@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StudentProfile } from '../../types/index.ts';
 import {
   FileText,
@@ -13,7 +13,6 @@ import {
   Award,
   FileCheck,
   AlertCircle,
-  Check,
 } from 'lucide-react';
 
 interface ResumeUploaderProps {
@@ -35,72 +34,18 @@ export const ResumeUploader: React.FC<ResumeUploaderProps> = ({
   const [isParsing, setIsParsing] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [isError, setIsError] = useState(false);
-  const [parsedViaAi, setParsedViaAi] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-
-  const sampleResumes = {
-    alex: {
-      name: 'Alex Chen (B.Tech AI & Data Science - 2026)',
-      fileName: 'Alex_Chen_Tech_Resume_2026.pdf',
-      text: `Alex Chen
-Email: hariesh.al23@bitsathy.ac.in | GitHub: github.com/alexchen | LinkedIn: linkedin.com/in/alexchen
-Education: B.Tech Artificial Intelligence & Data Science, Bannari Amman Institute of Technology, CGPA: 8.92/10 (Expected 2026)
-
-Technical Skills:
-- Languages: TypeScript, Python, Java, SQL, Go (Beginner)
-- Frontend: React.js, Next.js, Tailwind CSS, Redux Toolkit
-- Backend: Node.js, Express, FastAPI, RESTful APIs, GraphQL
-- Databases & Vector: PostgreSQL, MongoDB, Redis, pgvector
-- Cloud & DevOps: Docker, AWS (S3, EC2), Git, GitHub Actions, Linux
-
-Work Experience:
-Software Engineering Intern | ByteStream Technologies (Jun 2025 - Aug 2025)
-- Engineered high-throughput REST microservices in Node.js and TypeScript, handling 1.2M daily payload events with sub-45ms p99 latency.
-- Refactored PostgreSQL indexing and query caching with Redis, cutting database execution times by 38%.
-- Integrated automated CI/CD pipeline using GitHub Actions and Docker, reducing release deployment cycles by 25 minutes.
-
-Featured Projects:
-1. NeuralSearch - Semantic Multimodal Retrieval Engine (Python, FastAPI, pgvector, PyTorch)
-- Architected vector search platform indexing 150,000 research articles with hybrid BM25 and cosine dense vector re-ranking.
-- Built interactive frontend with React and Tailwind CSS providing real-time query latencies under 60ms.
-
-2. CloudPulse - Distributed Microservice Health Monitor (TypeScript, React, Go, Docker)
-- Designed real-time telemetry dashboard monitoring distributed Kubernetes cluster nodes via WebSockets.
-
-Certifications:
-- AWS Certified Cloud Practitioner
-- DeepLearning.AI Specialization in Deep Learning`,
-    },
-    priya: {
-      name: 'Priya Patel (B.S. CS & Machine Learning - 2026)',
-      fileName: 'Priya_Patel_ML_Resume_2026.pdf',
-      text: `Priya Patel
-Email: priya.patel@stanford.edu | GitHub: github.com/priyapatel
-Education: B.S. in Computer Science & AI, Stanford University, CGPA: 9.15/10 (2026)
-
-Technical Skills:
-- Machine Learning & AI: PyTorch, TensorFlow, Scikit-learn, HuggingFace, RAG, pgvector, LangChain
-- Backend & Big Data: Python, FastAPI, Apache Spark, Kafka, PostgreSQL, DuckDB
-- Cloud & Infrastructure: AWS, Docker, Kubernetes, Weights & Biases
-
-Experience:
-Research Assistant | Stanford AI Lab (Jan 2025 - Present)
-- Fine-tuned transformer models for biomedical document extraction, achieving 92.4% F1-score on token classification.
-- Deployed distributed vector embedding pipeline with pgvector and FastAPI processing 500k text passages.
-
-Projects:
-1. AgenticWorkflow: Multi-agent planning framework for automated code verification with LLMs.
-2. TensorStream: Real-time fraud detection pipeline on financial transaction streams using Kafka and PyTorch.
-
-Certifications:
-- DeepLearning.AI Generative AI with LLMs
-- TensorFlow Developer Certificate`,
-    },
-  };
+  const autoAnalyzeRef = useRef(false);
 
   const processFile = (file: File) => {
     setIsError(false);
     setStatusMsg('');
+
+    if (file.size > 18 * 1024 * 1024) {
+      setIsError(true);
+      setStatusMsg('Resume files must be 18 MB or smaller.');
+      return;
+    }
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     const isDocx = file.name.toLowerCase().endsWith('.docx');
@@ -117,6 +62,8 @@ Certifications:
       const reader = new FileReader();
       reader.onload = e => {
         const base64 = e.target?.result as string;
+        autoAnalyzeRef.current = true;
+        setResumeText('');
         setSelectedFile({
           name: file.name,
           size: file.size,
@@ -135,6 +82,7 @@ Certifications:
       const reader = new FileReader();
       reader.onload = e => {
         const text = e.target?.result as string;
+        autoAnalyzeRef.current = true;
         setResumeText(text);
         setSelectedFile({
           name: file.name,
@@ -150,6 +98,7 @@ Certifications:
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) processFile(file);
+    e.target.value = '';
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -162,7 +111,7 @@ Certifications:
   const handleParse = async () => {
     setIsParsing(true);
     setIsError(false);
-    setStatusMsg('Parsing resume with PyMuPDF & Gemini 3.8 Flash NLP...');
+    setStatusMsg('Extracting document text and updating your saved profile...');
 
     try {
       const payload: any = {};
@@ -189,11 +138,11 @@ Certifications:
       if (!res.ok) throw new Error(data.error || 'Parsing failed');
 
       onProfileUpdated(data.profile);
-      setParsedViaAi(data.parsedViaGemini);
       if (data.profile.resumeRawText) {
         setResumeText(data.profile.resumeRawText);
       }
-      setStatusMsg(`Success! Extracted ${data.profile.skills?.length || 0} skills and updated your student profile.`);
+      setIsError(!data.profile.skills?.length);
+      setStatusMsg(`${data.parsingMessage || 'Resume processed.'} Found ${data.profile.skills?.length || 0} skills.`);
       setTimeout(() => setStatusMsg(''), 5000);
     } catch (err: any) {
       setIsError(true);
@@ -203,16 +152,11 @@ Certifications:
     }
   };
 
-  const loadSample = (preset: typeof sampleResumes.alex) => {
-    setSelectedFile({
-      name: preset.fileName,
-      size: 42000,
-      type: 'application/pdf',
-    });
-    setResumeText(preset.text);
-    setIsError(false);
-    setStatusMsg(`Loaded ${preset.name}. Click "Run AI Extraction" to parse.`);
-  };
+  useEffect(() => {
+    if (!autoAnalyzeRef.current || !selectedFile) return;
+    autoAnalyzeRef.current = false;
+    void handleParse();
+  }, [selectedFile]);
 
   return (
     <div className="space-y-6">
@@ -229,22 +173,6 @@ Certifications:
             </p>
           </div>
 
-          {/* Quick Presets for Students */}
-          <div className="flex items-center space-x-2">
-            <span className="text-xs font-semibold text-slate-400">Student Sample Presets:</span>
-            <button
-              onClick={() => loadSample(sampleResumes.alex)}
-              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors"
-            >
-              Alex (Full Stack & AI)
-            </button>
-            <button
-              onClick={() => loadSample(sampleResumes.priya)}
-              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors"
-            >
-              Priya (ML & Data)
-            </button>
-          </div>
         </div>
 
         {/* Input area */}
@@ -274,11 +202,11 @@ Certifications:
                 Drag & Drop your Resume here or click to browse
               </p>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                Accepts PDF (.pdf), Word (.docx), or Text (.txt) up to 25MB
+                Accepts PDF (.pdf), Word (.docx), or Text (.txt) up to 18 MB
               </p>
 
               {/* Selected File Status Pill */}
-              {selectedFile ? (
+              {selectedFile && (
                 <div className="mt-3 inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-medium">
                   <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span className="font-semibold">{selectedFile.name}</span>
@@ -286,17 +214,16 @@ Certifications:
                     ({(selectedFile.size / 1024).toFixed(0)} KB)
                   </span>
                 </div>
-              ) : (
-                <label className="mt-3 inline-block px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer shadow-xs transition-colors">
-                  Choose Resume File
-                  <input
-                    type="file"
-                    accept=".pdf,.docx,.txt"
-                    onChange={handleFileInputChange}
-                    className="hidden"
-                  />
-                </label>
               )}
+              <label className="mt-3 inline-block px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer shadow-xs transition-colors">
+                {selectedFile ? 'Replace Resume File' : 'Choose Resume File'}
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt"
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                />
+              </label>
             </div>
 
             {/* Resume text / manual edit */}
@@ -328,7 +255,7 @@ Certifications:
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  <span>Run AI Resume Extraction & Recalculate Profile</span>
+                  <span>Re-run AI Extraction & Recalculate Profile</span>
                 </>
               )}
             </button>

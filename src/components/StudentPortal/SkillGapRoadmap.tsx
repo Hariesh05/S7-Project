@@ -81,13 +81,8 @@ export const SkillGapRoadmap: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center space-x-3 text-xs">
-            <span className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 font-semibold border border-rose-200">
-              2 Critical Blockers
-            </span>
-            <span className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-semibold border border-amber-200">
-              1 Important Gap
-            </span>
+          <div className="flex items-center space-x-3 text-xs text-slate-600">
+            {gaps.length} required skill gaps across active listings
           </div>
         </div>
 
@@ -97,14 +92,14 @@ export const SkillGapRoadmap: React.FC = () => {
             Identified Capability Gaps for Target Roles
           </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {gaps.length ? <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {gaps.map(gap => (
               <div key={gap.skillName} className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex flex-col justify-between">
                 <div>
                   <div className="flex justify-between items-start mb-2">
                     {getImportanceBadge(gap.importance)}
                     <span className="text-[10px] text-slate-500 font-mono">
-                      ~{gap.estimatedHours} hrs
+                      {gap.estimatedHours ? `~${gap.estimatedHours} hrs` : 'Hours not estimated'}
                     </span>
                   </div>
 
@@ -131,11 +126,11 @@ export const SkillGapRoadmap: React.FC = () => {
 
                 <div className="pt-3 mt-3 border-t border-slate-200/60 text-[11px] text-emerald-700 font-medium flex items-center space-x-1">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Prerequisites Met</span>
+                  <span>{!gap.prerequisitesKnown ? 'Prerequisites not configured' : gap.prerequisitesMet ? 'No missing prerequisites' : `Missing: ${gap.missingPrerequisites.join(', ')}`}</span>
                 </div>
               </div>
             ))}
-          </div>
+          </div> : <p className="py-8 text-center text-sm text-slate-500">Add a resume and browse active job listings to generate skill gaps.</p>}
         </div>
       </div>
 
@@ -154,7 +149,7 @@ export const SkillGapRoadmap: React.FC = () => {
         </div>
 
         <div className="space-y-6 pt-6">
-          {roadmap.map(step => (
+          {roadmap.length ? roadmap.map(step => (
             <div
               key={step.stepNumber}
               className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 hover:border-indigo-200 transition-colors"
@@ -174,7 +169,7 @@ export const SkillGapRoadmap: React.FC = () => {
                 <div className="flex items-center space-x-3">
                   <span className="text-xs text-slate-500 flex items-center space-x-1">
                     <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Est. {step.estimatedWeeks} Weeks</span>
+                    <span>{step.estimatedWeeks ? `Est. ${step.estimatedWeeks} weeks` : 'Time estimate unavailable'}</span>
                   </span>
                   {getImportanceBadge(step.importance)}
                 </div>
@@ -241,7 +236,7 @@ export const SkillGapRoadmap: React.FC = () => {
                 </div>
               </div>
             </div>
-          ))}
+          )) : <p className="py-8 text-center text-sm text-slate-500">A learning roadmap will appear when active jobs identify skill requirements.</p>}
         </div>
       </div>
     </div>

@@ -3,7 +3,9 @@ import { StudentProfile, User } from '../../types/index.ts';
 import { PlacementReadinessCard } from './PlacementReadinessCard.tsx';
 import { DigitalTwinSimulator } from './DigitalTwinSimulator.tsx';
 import { ResumeUploader } from './ResumeUploader.tsx';
-import { SkillKnowledgeGraph } from './SkillKnowledgeGraph.tsx';
+import { StudentProfileEditor } from './StudentProfileEditor.tsx';
+import { ResumeEvidenceMap } from './ResumeEvidenceMap.tsx';
+import { LiveSkillKnowledgeGraph } from './LiveSkillKnowledgeGraph.tsx';
 import { JobRecommendations } from './JobRecommendations.tsx';
 import { SkillGapRoadmap } from './SkillGapRoadmap.tsx';
 import { ATSScanner } from './ATSScanner.tsx';
@@ -23,6 +25,8 @@ import {
   TrendingUp,
   Award,
   ArrowRight,
+  UserRound,
+  ClipboardCheck,
 } from 'lucide-react';
 
 interface StudentDashboardProps {
@@ -33,8 +37,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
   const [profile, setProfile] = useState<StudentProfile | null>(null);
   const [careerRoles, setCareerRoles] = useState<any[]>([]);
   const [skillsTaxonomy, setSkillsTaxonomy] = useState<any[]>([]);
+  const [skillEdges, setSkillEdges] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'resume' | 'graph' | 'jobs' | 'roadmap' | 'ats' | 'interview' | 'applications'
+    'overview' | 'profile' | 'resume' | 'evidence' | 'graph' | 'jobs' | 'roadmap' | 'ats' | 'interview' | 'applications'
   >('overview');
   const [loading, setLoading] = useState(true);
 
@@ -45,19 +50,20 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
   const fetchStudentData = async () => {
     setLoading(true);
     try {
-      const [profileRes, rolesRes, skillsRes] = await Promise.all([
+      const [profileRes, rolesRes, graphRes] = await Promise.all([
         fetch('/api/student/profile'),
         fetch('/api/student/career-recommendations'),
-        fetch('/api/admin/skills'),
+        fetch('/api/student/skill-graph'),
       ]);
 
       const pData = await profileRes.json();
       const rData = await rolesRes.json();
-      const sData = await skillsRes.json();
+      const graphData = await graphRes.json();
 
       setProfile(pData);
       setCareerRoles(rData);
-      setSkillsTaxonomy(sData);
+      setSkillsTaxonomy(graphData.nodes || []);
+      setSkillEdges(graphData.edges || []);
     } catch (err) {
       console.error('Error fetching student data:', err);
     } finally {
@@ -87,17 +93,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
           <div>
             <div className="flex items-center space-x-2">
               <h1 className="text-xl font-black text-slate-900 tracking-tight">{currentUser.name}</h1>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">
-                Cohort '26
-              </span>
             </div>
             <p className="text-xs text-slate-600 font-medium mt-0.5">{profile.headline}</p>
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 mt-1">
-              <span>{profile.university}</span>
-              <span>·</span>
-              <span>CGPA: <strong className="text-slate-800">{profile.cgpa}</strong></span>
-              <span>·</span>
-              <span>{profile.skills.length} Extracted Skills</span>
+              {profile.university && <span>{profile.university}</span>}
+              {profile.cgpa > 0 && <span>CGPA: <strong className="text-slate-800">{profile.cgpa}</strong></span>}
+              <span>{profile.skills.length} Profile Skills</span>
             </div>
           </div>
         </div>
@@ -122,6 +123,15 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
 
       {/* Sub-Navigation Tabs */}
       <div className="flex items-center space-x-1 border-b border-slate-200 overflow-x-auto pb-px">
+        <button
+          onClick={() => setActiveTab('profile')}
+          className={`flex items-center space-x-2 py-3 px-3.5 text-xs font-semibold border-b-2 whitespace-nowrap transition-all ${
+            activeTab === 'profile' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <UserRound className="w-4 h-4" />
+          <span>Profile</span>
+        </button>
         <button
           onClick={() => setActiveTab('overview')}
           className={`flex items-center space-x-2 py-3 px-3.5 text-xs font-semibold border-b-2 whitespace-nowrap transition-all ${
@@ -156,6 +166,16 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
         >
           <Network className="w-4 h-4" />
           <span>Knowledge Graph (DAG)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('evidence')}
+          className={`flex items-center space-x-2 py-3 px-3.5 text-xs font-semibold border-b-2 whitespace-nowrap transition-all ${
+            activeTab === 'evidence' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <ClipboardCheck className="w-4 h-4" />
+          <span>Resume Evidence Map</span>
         </button>
 
         <button
@@ -232,6 +252,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
           {/* AI Career Digital Twin Simulator */}
           <DigitalTwinSimulator
             currentScore={profile.placementReadiness.overall}
+            availableSkills={[...new Set(careerRoles.flatMap(role => role.criticalMissingSkills || []))]}
             onSimulate={() => {}}
           />
 
@@ -241,7 +262,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
               <div>
                 <h3 className="text-base font-bold text-slate-900">Recommended Career Roles</h3>
                 <p className="text-xs text-slate-500">
-                  Multivariate market alignment based on skill taxonomy and compensation data.
+                  Match scores are calculated from your saved skills and active job requirements.
                 </p>
               </div>
               <button
@@ -253,7 +274,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-5">
+            {careerRoles.length ? <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-5">
               {careerRoles.map((role, idx) => (
                 <div
                   key={idx}
@@ -273,7 +294,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
                     <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{role.description}</p>
 
                     <div className="mt-3 text-xs font-semibold text-slate-800">
-                      Avg Comp: {role.averageSalary}
+                      Listed compensation: {role.averageSalary}
                     </div>
                   </div>
 
@@ -283,9 +304,17 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
                   </div>
                 </div>
               ))}
-            </div>
+            </div> : <p className="py-8 text-center text-sm text-slate-500">No active jobs yet. Recommendations will appear when recruiters post roles.</p>}
           </div>
         </div>
+      )}
+
+      {activeTab === 'profile' && (
+        <StudentProfileEditor
+          profile={profile}
+          onProfileUpdated={updated => setProfile(updated)}
+          onOpenResume={() => setActiveTab('resume')}
+        />
       )}
 
       {activeTab === 'resume' && (
@@ -296,14 +325,16 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
       )}
 
       {activeTab === 'graph' && (
-        <SkillKnowledgeGraph
+        <LiveSkillKnowledgeGraph
           skills={skillsTaxonomy}
-          edges={[]}
+          edges={skillEdges}
           studentProfile={profile}
         />
       )}
 
-      {activeTab === 'jobs' && <JobRecommendations />}
+      {activeTab === 'evidence' && <ResumeEvidenceMap onOpenResume={() => setActiveTab('resume')} />}
+
+      {activeTab === 'jobs' && <JobRecommendations profile={profile} currentUser={currentUser} />}
 
       {activeTab === 'roadmap' && <SkillGapRoadmap />}
 

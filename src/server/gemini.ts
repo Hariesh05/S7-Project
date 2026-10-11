@@ -230,14 +230,13 @@ Calculate:
 3. Experience Match (0-100)
 4. Education Match (0-100)
 5. Project Relevance (0-100)
-6. Vector cosine similarity estimation (0.0 to 1.0)
-7. 3-4 concrete reasons WHY this job was recommended (prose sentences explaining specific overlaps)
-8. Matched skills
-9. Missing skills categorized strictly into:
+6. 3-4 concrete reasons WHY this job was recommended (prose sentences explaining specific overlaps)
+7. Matched skills
+8. Missing skills categorized strictly into:
    - Critical (vital prerequisites without which candidate will likely fail screening)
    - Important (moderately required for core responsibilities)
    - Optional (nice-to-have or preferred perks)
-10. Projected readiness score boost if critical skills are mastered (1-15 points)`;
+9. Do not invent experience, skills, outcomes, or placement probabilities.`;
 
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
@@ -252,7 +251,6 @@ Calculate:
             experienceMatch: { type: Type.INTEGER },
             educationMatch: { type: Type.INTEGER },
             projectRelevance: { type: Type.INTEGER },
-            vectorSimilarity: { type: Type.NUMBER },
             whyRecommended: { type: Type.ARRAY, items: { type: Type.STRING } },
             matchedSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
             missingSkills: {
@@ -264,7 +262,6 @@ Calculate:
               },
               required: ['critical', 'important', 'optional'],
             },
-            projectedReadinessBoost: { type: Type.INTEGER },
           },
           required: [
             'overallMatch',

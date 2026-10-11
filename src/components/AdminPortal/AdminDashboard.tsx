@@ -3,6 +3,8 @@ import { User } from '../../types/index.ts';
 import { MarketIntelligenceView } from './MarketIntelligenceView.tsx';
 import { AIModelEvalView } from './AIModelEvalView.tsx';
 import { PostgresSqlConsole } from './PostgresSqlConsole.tsx';
+import { SkillCatalogView } from './SkillCatalogView.tsx';
+import { AdminJobListings } from './AdminJobListings.tsx';
 import {
   ShieldCheck,
   TrendingUp,
@@ -22,7 +24,7 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) => {
   const [metrics, setMetrics] = useState<any | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'aimodel' | 'postgres'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'jobs' | 'skills' | 'market' | 'aimodel' | 'postgres'>('overview');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -55,16 +57,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
             <div className="flex items-center space-x-2">
               <h1 className="text-xl font-black text-slate-900 tracking-tight">{currentUser.name}</h1>
               <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">
-                Dean of Placements
+                Administrator
               </span>
             </div>
             <p className="text-xs text-slate-600 font-medium mt-0.5">
-              Campus Placement Intelligence & Institutional Analytics Directorate
+              Placement platform administration
             </p>
             <div className="flex items-center space-x-2 text-[11px] text-slate-500 mt-1">
-              <span>Class of 2026</span>
+              <span>{metrics?.totalStudents ?? 0} registered students</span>
               <span>·</span>
-              <span>1,240 Enrolled Engineering Candidates</span>
+              <span>{metrics?.totalJobsPosted ?? 0} active job listings</span>
+              {Boolean(metrics?.demoJobsCount) && <span>· {metrics.demoJobsCount} demo</span>}
             </div>
           </div>
         </div>
@@ -80,6 +83,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
             }`}
           >
             Placement Analytics
+          </button>
+          <button
+            onClick={() => setActiveTab('jobs')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+              activeTab === 'jobs'
+                ? 'bg-white text-indigo-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Job Listings
+          </button>
+          <button
+            onClick={() => setActiveTab('skills')}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+              activeTab === 'skills'
+                ? 'bg-white text-indigo-700 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Skill Catalog
           </button>
           <button
             onClick={() => setActiveTab('market')}
@@ -121,13 +144,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Campus Placement Rate
+                Student Offer Rate
               </span>
               <div className="text-2xl font-black text-emerald-600 mt-1">
                 {metrics.placementRate}%
               </div>
               <span className="text-[11px] text-slate-500">
-                {metrics.placedStudents} of {metrics.totalStudents} placed
+                {metrics.placedStudents} offers for {metrics.totalStudents} students
               </span>
             </div>
 
@@ -138,38 +161,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
               <div className="text-2xl font-black text-slate-900 mt-1">
                 {metrics.averageSalaryPackage}
               </div>
-              <span className="text-[11px] text-slate-500">Tier-1 full-stack & ML cohorts</span>
+              <span className="text-[11px] text-slate-500">Based on recorded offer data</span>
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Highest Package
+                Highest Recorded Package
               </span>
               <div className="text-2xl font-black text-indigo-600 mt-1">
                 {metrics.highestSalaryPackage}
               </div>
-              <span className="text-[11px] text-slate-500">Frontier AI Research role</span>
+              <span className="text-[11px] text-slate-500">Based on recorded offer data</span>
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Active Tech Employers
+                Employers With Listings
               </span>
               <div className="text-2xl font-black text-slate-900 mt-1">
                 {metrics.activeHiringCompanies}
               </div>
-              <span className="text-[11px] text-slate-500">Partnered on-campus portals</span>
+              <span className="text-[11px] text-slate-500">From posted jobs</span>
             </div>
           </div>
 
           {/* Top Hiring Companies Leaderboard */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
-              Top Recruiting Tech Companies Leaderboard
+              Employers by offers and active job listings
             </h3>
 
             <div className="divide-y divide-slate-100">
-              {metrics.topHiringCompanies?.map((comp: any, idx: number) => (
+              {metrics.topHiringCompanies?.length ? metrics.topHiringCompanies.map((comp: any, idx: number) => (
                 <div
                   key={comp.name}
                   className="py-3.5 flex items-center justify-between text-xs"
@@ -188,17 +211,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                     </div>
                     <div>
                       <span className="text-[10px] text-slate-400 uppercase font-semibold">
-                        Avg Package
+                        Active Listings
                       </span>
-                      <div className="font-bold text-indigo-600 text-right">{comp.avgPackage}</div>
+                      <div className="font-bold text-indigo-600 text-right">{comp.jobsCount}</div>
                     </div>
                   </div>
                 </div>
-              ))}
+              )) : <p className="py-8 text-center text-sm text-slate-500">No employers have posted jobs yet.</p>}
             </div>
           </div>
         </div>
       )}
+
+      {/* Tab 2: Market Intelligence */}
+      {activeTab === 'jobs' && <AdminJobListings />}
+      {activeTab === 'skills' && <SkillCatalogView />}
 
       {/* Tab 2: Market Intelligence */}
       {activeTab === 'market' && <MarketIntelligenceView />}

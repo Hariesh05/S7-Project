@@ -45,7 +45,7 @@ export const AIModelEvalView: React.FC = () => {
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Performance metrics, embedding distributions, and student feedback validation loop.
+            Recorded feedback is shown below. Model latency, embeddings, and benchmark accuracy are not yet instrumented.
           </p>
         </div>
 
@@ -56,9 +56,9 @@ export const AIModelEvalView: React.FC = () => {
               Total Embeddings
             </span>
             <div className="text-2xl font-black text-slate-900 mt-1">
-              {metrics.totalEmbeddingsComputed.toLocaleString()}
+              {metrics.totalEmbeddingsComputed ? metrics.totalEmbeddingsComputed.toLocaleString() : '—'}
             </div>
-            <span className="text-[11px] text-slate-500">pgvector cosine vectors</span>
+            <span className="text-[11px] text-slate-500">Not yet measured</span>
           </div>
 
           <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60">
@@ -66,9 +66,9 @@ export const AIModelEvalView: React.FC = () => {
               Avg Model Latency
             </span>
             <div className="text-2xl font-black text-emerald-600 mt-1">
-              {metrics.averageLatencyMs} ms
+              {metrics.averageLatencyMs ? `${metrics.averageLatencyMs} ms` : '—'}
             </div>
-            <span className="text-[11px] text-slate-500">Gemini 3.8 Flash p50 inference</span>
+            <span className="text-[11px] text-slate-500">Not yet measured</span>
           </div>
 
           <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60">
@@ -76,9 +76,9 @@ export const AIModelEvalView: React.FC = () => {
               Semantic Accuracy
             </span>
             <div className="text-2xl font-black text-indigo-600 mt-1">
-              {metrics.semanticMatchAccuracyRate}%
+              {metrics.semanticMatchAccuracyRate ? `${metrics.semanticMatchAccuracyRate}%` : '—'}
             </div>
-            <span className="text-[11px] text-slate-500">Benchmark vs human recruiter</span>
+            <span className="text-[11px] text-slate-500">No validated benchmark</span>
           </div>
 
           <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60">
@@ -86,22 +86,22 @@ export const AIModelEvalView: React.FC = () => {
               Student Approval Rate
             </span>
             <div className="text-2xl font-black text-violet-600 mt-1">
-              {metrics.userFeedbackApprovalRate}%
+              {metrics.feedbackSampleCount ? `${metrics.userFeedbackApprovalRate}%` : '—'}
             </div>
             <span className="text-[11px] text-slate-500">Based on {metrics.feedbackSampleCount} reviews</span>
           </div>
         </div>
       </div>
 
-      {/* Cosine Similarity Distribution Chart */}
+      {/* Embedding telemetry */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
-          Vector Cosine Similarity Score Distribution
+          Vector Similarity Telemetry
         </h3>
 
         <div className="h-64 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={metrics.cosineDistribution}>
+              {metrics.cosineDistribution.length ? <BarChart data={metrics.cosineDistribution}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis dataKey="bucket" tick={{ fontSize: 11, fill: '#64748b' }} />
               <YAxis tick={{ fontSize: 11, fill: '#64748b' }} />
@@ -120,9 +120,12 @@ export const AIModelEvalView: React.FC = () => {
                 }}
               />
               <Bar dataKey="count" fill="#4f46e5" radius={[6, 6, 0, 0]} />
-            </BarChart>
+              </BarChart> : null}
           </ResponsiveContainer>
         </div>
+          {!metrics.cosineDistribution.length && (
+            <p className="text-center text-sm text-slate-500">No embedding similarity data has been recorded.</p>
+          )}
       </div>
     </div>
   );

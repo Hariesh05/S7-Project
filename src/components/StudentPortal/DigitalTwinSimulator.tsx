@@ -3,22 +3,16 @@ import { Sparkles, ArrowRight, Check, Zap, Target } from 'lucide-react';
 
 interface DigitalTwinSimulatorProps {
   currentScore: number;
+  availableSkills: string[];
   onSimulate: (skills: string[]) => void;
 }
 
 export const DigitalTwinSimulator: React.FC<DigitalTwinSimulatorProps> = ({
   currentScore,
+  availableSkills,
   onSimulate,
 }) => {
-  const availableSimSkills = [
-    { name: 'Apache Kafka', category: 'Backend Streaming', boost: 4 },
-    { name: 'Kubernetes', category: 'DevOps & SRE', boost: 4.5 },
-    { name: 'GraphQL', category: 'API Architecture', boost: 2 },
-    { name: 'System Design', category: 'Concurrency & Scaling', boost: 3.5 },
-    { name: 'PyTorch', category: 'Deep Learning', boost: 3 },
-  ];
-
-  const [selectedSkills, setSelectedSkills] = useState<string[]>(['Apache Kafka', 'Kubernetes']);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [simulatedData, setSimulatedData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -57,7 +51,7 @@ export const DigitalTwinSimulator: React.FC<DigitalTwinSimulatorProps> = ({
             <h3 className="text-base font-bold text-white">AI Career Digital Twin Simulator</h3>
           </div>
           <p className="text-xs text-indigo-200/80 mt-1">
-            Simulate "What-If" career trajectory scenarios: model how acquiring specific skills impacts readiness & qualification.
+            Compare your current required-skill coverage with a hypothetical set of skills against active job listings.
           </p>
         </div>
 
@@ -83,24 +77,26 @@ export const DigitalTwinSimulator: React.FC<DigitalTwinSimulatorProps> = ({
           Select Target Capabilities to Model Learning:
         </label>
         <div className="flex flex-wrap gap-2">
-          {availableSimSkills.map(s => {
-            const isSelected = selectedSkills.includes(s.name);
+          {availableSkills.map(skill => {
+            const isSelected = selectedSkills.includes(skill);
             return (
               <button
-                key={s.name}
-                onClick={() => toggleSkill(s.name)}
+                key={skill}
+                onClick={() => toggleSkill(skill)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all flex items-center space-x-1.5 ${
                   isSelected
                     ? 'bg-indigo-600/80 border-indigo-400 text-white shadow-xs'
                     : 'bg-white/5 border-white/10 text-indigo-200 hover:bg-white/10'
                 }`}
               >
-                <span>{s.name}</span>
-                <span className="text-[10px] text-indigo-300/80">+{s.boost} pts</span>
+                <span>{skill}</span>
                 {isSelected && <Check className="w-3 h-3 text-cyan-300 ml-1" />}
               </button>
             );
           })}
+          {!availableSkills.length && (
+            <p className="text-xs text-indigo-200/80">No missing required skills are available. Active job postings are needed to compare coverage.</p>
+          )}
         </div>
       </div>
 
@@ -110,22 +106,22 @@ export const DigitalTwinSimulator: React.FC<DigitalTwinSimulatorProps> = ({
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center space-x-6">
               <div>
-                <span className="text-[11px] text-indigo-300 font-medium block">Current Readiness</span>
+                <span className="text-[11px] text-indigo-300 font-medium block">Current Skill Coverage</span>
                 <span className="text-xl font-bold text-white">{simulatedData.currentScore}/100</span>
               </div>
               <ArrowRight className="w-5 h-5 text-indigo-400 shrink-0" />
               <div>
-                <span className="text-[11px] text-cyan-300 font-medium block">Projected Readiness</span>
+                <span className="text-[11px] text-cyan-300 font-medium block">Projected Coverage</span>
                 <span className="text-2xl font-black text-cyan-300">{simulatedData.simulatedScore}/100</span>
               </div>
             </div>
 
             <div className="text-right">
               <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 font-bold">
-                +{simulatedData.boost} Points Lift
+                +{simulatedData.boost} Coverage Points
               </span>
               <span className="text-[11px] text-indigo-200 block mt-1">
-                Cohort Percentile: {simulatedData.simulatedPercentile}th
+                {simulatedData.unlockedJobsCount} listings covered for every required skill
               </span>
             </div>
           </div>

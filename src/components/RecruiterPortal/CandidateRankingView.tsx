@@ -45,12 +45,23 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
     }
   };
 
-  const handleUpdateStatus = (candidateId: string, newStatus: string) => {
-    setCandidates(prev =>
-      prev.map(c => (c.id === candidateId ? { ...c, status: newStatus } : c))
-    );
-    if (selectedCandidate?.id === candidateId) {
-      setSelectedCandidate((prev: any) => ({ ...prev, status: newStatus }));
+  const handleUpdateStatus = async (candidateId: string, newStatus: string) => {
+    const candidate = candidates.find(item => item.id === candidateId);
+    if (!candidate?.applicationId) return;
+    try {
+      const response = await fetch(`/api/recruiter/applications/${candidate.applicationId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not update applicant status');
+      setCandidates(prev => prev.map(item => item.id === candidateId ? { ...item, status: newStatus } : item));
+      if (selectedCandidate?.id === candidateId) {
+        setSelectedCandidate((prev: any) => ({ ...prev, status: newStatus }));
+      }
+    } catch (error) {
+      console.error('Application status update failed:', error);
     }
   };
 
@@ -72,8 +83,8 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
           <div>
             <div className="flex items-center space-x-2">
               <Users className="w-5 h-5 text-indigo-600" />
-              <h2 className="text-lg font-bold text-slate-900">
-                AI Semantic Candidate Ranking & Screening
+                <h2 className="text-lg font-bold text-slate-900">
+                Applicant Profiles & Skills Match
               </h2>
             </div>
             <p className="text-xs text-slate-500 mt-1">
@@ -113,11 +124,11 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
         {loading ? (
           <div className="py-16 text-center text-xs text-slate-500">
             <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-            Ranking candidate cohort via semantic vector embeddings...
+            Loading applicant profiles and comparing documented skills...
           </div>
         ) : filtered.length === 0 ? (
           <div className="py-12 text-center text-xs text-slate-500">
-            No candidates match the specified screening threshold.
+            {candidates.length ? 'No applicants match this screening threshold.' : 'No applications have been submitted for this job yet.'}
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-6">
@@ -181,7 +192,7 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
 
             {/* Candidate Detailed Drawer (Right 5 Cols) */}
             {selectedCandidate && (
-              <div className="lg:col-span-5 p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-5">
+              <div className="lg:col-span-5 p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-5 max-h-[75vh] overflow-y-auto">
                 <div className="flex items-center justify-between pb-4 border-b border-slate-200">
                   <div className="flex items-center space-x-3">
                     <img
@@ -199,9 +210,87 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
                     <span className="text-xl font-black text-indigo-600 block">
                       {selectedCandidate.matchScore}%
                     </span>
-                    <span className="text-[10px] text-slate-500 uppercase font-semibold">AI Match</span>
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold">Profile Match</span>
                   </div>
                 </div>
+
+                {selectedCandidate.profile?.headline && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Headline</span>
+                    <p className="text-xs text-slate-700 mt-1">{selectedCandidate.profile.headline}</p>
+                  </div>
+                )}
+                {selectedCandidate.profile?.bio && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">About</span>
+                    <p className="text-xs text-slate-700 mt-1 whitespace-pre-wrap">{selectedCandidate.profile.bio}</p>
+                  </div>
+                )}
+                {selectedCandidate.profile?.targetRoles?.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Target roles</span>
+                    <p className="text-xs text-slate-700 mt-1">{selectedCandidate.profile.targetRoles.join(', ')}</p>
+                  </div>
+                )}
+                {selectedCandidate.profile?.education?.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Education</span>
+                    <div className="space-y-2 mt-1">
+                      {selectedCandidate.profile.education.map((education: any, index: number) => (
+                        <div key={`education_${index}`} className="text-xs text-slate-700">
+                          <p className="font-semibold">{education.degree || 'Degree not specified'}{education.fieldOfStudy ? ` · ${education.fieldOfStudy}` : ''}</p>
+                          <p>{education.institution}{education.endYear ? ` · ${education.endYear}` : ''}{education.grade ? ` · ${education.grade}` : ''}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedCandidate.profile?.experience?.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Experience</span>
+                    <div className="space-y-3 mt-1">
+                      {selectedCandidate.profile.experience.map((experience: any, index: number) => (
+                        <div key={`experience_${index}`} className="text-xs text-slate-700 border-l-2 border-indigo-200 pl-3">
+                          <p className="font-semibold">{experience.role}{experience.company ? ` · ${experience.company}` : ''}</p>
+                          <p className="text-slate-500">{experience.startDate}{experience.endDate ? ` - ${experience.endDate}` : experience.isCurrent ? ' - Present' : ''}</p>
+                          {experience.description && <p className="mt-1 whitespace-pre-wrap">{experience.description}</p>}
+                          {experience.skillsUsed?.length > 0 && <p className="mt-1 text-slate-500">Skills: {experience.skillsUsed.join(', ')}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedCandidate.profile?.projects?.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Projects</span>
+                    <div className="space-y-3 mt-1">
+                      {selectedCandidate.profile.projects.map((project: any, index: number) => (
+                        <div key={`project_${index}`} className="text-xs text-slate-700">
+                          <p className="font-semibold">{project.title}</p>
+                          {project.description && <p className="mt-1 whitespace-pre-wrap">{project.description}</p>}
+                          {project.technologies?.length > 0 && <p className="mt-1 text-slate-500">Technologies: {project.technologies.join(', ')}</p>}
+                          {project.repoUrl && <a className="mt-1 inline-block text-indigo-600 underline" href={project.repoUrl} target="_blank" rel="noreferrer">Repository</a>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedCandidate.profile?.certifications?.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Certifications</span>
+                    <ul className="list-disc pl-5 mt-1 text-xs text-slate-700">
+                      {selectedCandidate.profile.certifications.map((certification: any, index: number) => (
+                        <li key={`certification_${index}`}>{certification.name}{certification.issuer ? ` · ${certification.issuer}` : ''}{certification.issueDate ? ` · ${certification.issueDate}` : ''}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {selectedCandidate.profile?.resumeRawText && (
+                  <details className="border-t border-slate-200 pt-3">
+                    <summary className="cursor-pointer text-xs font-semibold text-indigo-700">View applicant-shared resume text</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-white p-3 text-[11px] text-slate-700">{selectedCandidate.profile.resumeRawText}</pre>
+                  </details>
+                )}
 
                 {/* Readiness & ATS Indices */}
                 <div className="grid grid-cols-2 gap-3">

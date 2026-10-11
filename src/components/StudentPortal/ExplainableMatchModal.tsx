@@ -141,8 +141,7 @@ export const ExplainableMatchModal: React.FC<ExplainableMatchModalProps> = ({
             </div>
 
             <div className="mt-3 text-[11px] text-slate-500 flex items-center justify-between">
-              <span>Vector Cosine Similarity: <strong className="font-mono text-slate-700">{matchScore.vectorSimilarity}</strong></span>
-              <span className="text-emerald-700 font-medium">+{matchScore.projectedReadinessBoost} pts readiness uplift if gaps closed</span>
+              <span>Vector similarity: <strong className="font-mono text-slate-700">{typeof matchScore.vectorSimilarity === 'number' ? matchScore.vectorSimilarity.toFixed(2) : 'Not computed'}</strong></span>
             </div>
           </div>
 

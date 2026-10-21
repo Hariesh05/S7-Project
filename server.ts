@@ -16,6 +16,8 @@ import {
   SkillNode,
   RoadmapStep,
   StudentSkill,
+  GitHubDetails,
+  LeetCodeDetails,
 } from './src/types/index.ts';
 
 import { calculateLocalSemanticMatch } from './src/server/matching.ts';
@@ -114,6 +116,27 @@ const createStudentProfile = (user: User): StudentProfile => ({
   experience: [],
   projects: [],
   certifications: [],
+  topCertifications: [],
+  github: {
+    username: '',
+    profileUrl: '',
+    publicRepos: 0,
+    totalStars: 0,
+    followers: 0,
+    contributions: 0,
+    topLanguages: [],
+  },
+  leetcode: {
+    username: '',
+    profileUrl: '',
+    ranking: 0,
+    rating: 0,
+    totalSolved: 0,
+    easySolved: 0,
+    mediumSolved: 0,
+    hardSolved: 0,
+    acceptanceRate: 0,
+  },
   placementReadiness: {
     overall: 0,
     breakdown: {
@@ -204,21 +227,227 @@ const setSessionCookie = (res: express.Response, userId: string) => {
   res.setHeader('Set-Cookie', `nexus_session=${encodeURIComponent(`${userId}.${signature}`)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure}`);
 };
 
+const cleanGitHubUsername = (input: string): string => {
+  if (!input) return '';
+  let cleaned = input.trim();
+  cleaned = cleaned.replace(/^https?:\/\/(?:www\.)?github\.com\//i, '');
+  cleaned = cleaned.replace(/^github\.com\//i, '');
+  cleaned = cleaned.replace(/^@/, '');
+  cleaned = cleaned.split('/')[0].split('?')[0].trim();
+  return cleaned;
+};
+
+const cleanLeetCodeUsername = (input: string): string => {
+  if (!input) return '';
+  let cleaned = input.trim();
+  cleaned = cleaned.replace(/^https?:\/\/(?:www\.)?leetcode\.com\/u\//i, '');
+  cleaned = cleaned.replace(/^https?:\/\/(?:www\.)?leetcode\.com\//i, '');
+  cleaned = cleaned.replace(/^leetcode\.com\/u\//i, '');
+  cleaned = cleaned.replace(/^leetcode\.com\//i, '');
+  cleaned = cleaned.replace(/^@/, '');
+  cleaned = cleaned.split('/')[0].split('?')[0].trim();
+  return cleaned;
+};
+
+async function fetchGitHubDetails(usernameOrUrl: string): Promise<GitHubDetails> {
+  const username = cleanGitHubUsername(usernameOrUrl);
+  if (!username) {
+    throw new Error('Please provide a valid GitHub username or profile link.');
+  }
+  const headers: Record<string, string> = {
+    'User-Agent': 'NexusCareer-StudentPlatform',
+    Accept: 'application/vnd.github.v3+json',
+  };
+  if (process.env.GITHUB_TOKEN) {
+    headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+  }
+
+  const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}`, { headers });
+  if (!userRes.ok) {
+    if (userRes.status === 404) {
+      throw new Error(`GitHub user "${username}" was not found.`);
+    }
+    if (userRes.status === 403) {
+      throw new Error('GitHub API rate limit exceeded. You can manually enter your profile statistics.');
+    }
+    throw new Error(`GitHub API returned status ${userRes.status}.`);
+  }
+  const userData = await userRes.json();
+
+  let totalStars = 0;
+  const languageFrequency: Record<string, number> = {};
+
+  try {
+    const reposRes = await fetch(
+      `https://api.github.com/users/${encodeURIComponent(username)}/repos?per_page=100&sort=updated`,
+      { headers }
+    );
+    if (reposRes.ok) {
+      const repos = await reposRes.json();
+      if (Array.isArray(repos)) {
+        for (const repo of repos) {
+          totalStars += Number(repo.stargazers_count) || 0;
+          if (repo.language && typeof repo.language === 'string') {
+            languageFrequency[repo.language] = (languageFrequency[repo.language] || 0) + 1;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('GitHub repos fetching fallback:', err);
+  }
+
+  const topLanguages = Object.entries(languageFrequency)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([lang]) => lang);
+
+  return {
+    username: userData.login || username,
+    profileUrl: userData.html_url || `https://github.com/${username}`,
+    publicRepos: Number(userData.public_repos) || 0,
+    totalStars,
+    followers: Number(userData.followers) || 0,
+    topLanguages,
+    lastSyncedAt: new Date().toISOString(),
+  };
+}
+
+async function fetchLeetCodeDetails(usernameOrUrl: string): Promise<LeetCodeDetails> {
+  const username = cleanLeetCodeUsername(usernameOrUrl);
+  if (!username) {
+    throw new Error('Please provide a valid LeetCode username or profile link.');
+  }
+
+  const query = JSON.stringify({
+    query: `query getUserProfile($username: String!) {
+      matchedUser(username: $username) {
+        username
+        profile {
+          ranking
+          reputation
+        }
+        submitStats: submitStatsGlobal {
+          acSubmissionNum {
+            difficulty
+            count
+          }
+        }
+      }
+      userContestRanking(username: $username) {
+        rating
+        globalRanking
+        topPercentage
+      }
+    }`,
+    variables: { username },
+  });
+
+  const res = await fetch('https://leetcode.com/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Referer: 'https://leetcode.com',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    },
+    body: query,
+  });
+
+  if (!res.ok) {
+    throw new Error(`LeetCode API returned status ${res.status}. You can manually enter your statistics.`);
+  }
+
+  const result = await res.json();
+  if (!result?.data?.matchedUser) {
+    throw new Error(`LeetCode user "${username}" was not found.`);
+  }
+
+  const matched = result.data.matchedUser;
+  const contest = result.data.userContestRanking;
+  const subStats = matched.submitStats?.acSubmissionNum || [];
+
+  const getDifficultyCount = (diff: string): number => {
+    const entry = subStats.find((s: any) => s.difficulty?.toLowerCase() === diff.toLowerCase());
+    return entry ? Number(entry.count) || 0 : 0;
+  };
+
+  const totalSolved = getDifficultyCount('all');
+  const easySolved = getDifficultyCount('easy');
+  const mediumSolved = getDifficultyCount('medium');
+  const hardSolved = getDifficultyCount('hard');
+  const ranking = contest?.globalRanking || matched.profile?.ranking || 0;
+  const rating = contest?.rating ? Math.round(contest.rating) : 0;
+
+  return {
+    username: matched.username || username,
+    profileUrl: `https://leetcode.com/u/${matched.username || username}`,
+    ranking: Number(ranking) || 0,
+    rating: Number(rating) || 0,
+    totalSolved,
+    easySolved,
+    mediumSolved,
+    hardSolved,
+    lastSyncedAt: new Date().toISOString(),
+  };
+}
+
 const getActiveStudentProfile = (): StudentProfile => {
   const userId = getActiveUserId();
   if (!studentProfiles[userId]) {
     const user = getCurrentUser();
     studentProfiles[userId] = createStudentProfile(user);
   }
-  return studentProfiles[userId];
+  const profile = studentProfiles[userId];
+  if (!profile.github) {
+    profile.github = {
+      username: '',
+      profileUrl: '',
+      publicRepos: 0,
+      totalStars: 0,
+      followers: 0,
+      contributions: 0,
+      topLanguages: [],
+    };
+  }
+  if (!profile.leetcode) {
+    profile.leetcode = {
+      username: '',
+      profileUrl: '',
+      ranking: 0,
+      rating: 0,
+      totalSolved: 0,
+      easySolved: 0,
+      mediumSolved: 0,
+      hardSolved: 0,
+      acceptanceRate: 0,
+    };
+  }
+  if (!profile.topCertifications) {
+    profile.topCertifications = [];
+  }
+  return profile;
 };
 
 const recalculateProfileReadiness = (profile: StudentProfile) => {
   const averageProficiency = profile.skills.length
     ? profile.skills.reduce((total, skill) => total + skill.proficiency, 0) / profile.skills.length
     : 0;
-  profile.placementReadiness.breakdown.technicalSkills = Math.round(averageProficiency * 20);
-  profile.placementReadiness.breakdown.projectsPortfolio = Math.min(100, profile.projects.length * 25);
+
+  let technicalSkills = Math.round(averageProficiency * 20);
+  if (profile.leetcode?.totalSolved && profile.leetcode.totalSolved > 0) {
+    const lcBonus = Math.min(25, Math.round(Math.log10(profile.leetcode.totalSolved + 1) * 10));
+    technicalSkills = Math.min(100, technicalSkills + lcBonus);
+  }
+  profile.placementReadiness.breakdown.technicalSkills = technicalSkills;
+
+  let projectsPortfolio = Math.min(100, profile.projects.length * 25);
+  if (profile.github?.publicRepos && profile.github.publicRepos > 0) {
+    const ghBonus = Math.min(20, Math.round(profile.github.publicRepos * 2 + (profile.github.totalStars || 0) * 3));
+    projectsPortfolio = Math.min(100, Math.max(projectsPortfolio, ghBonus + profile.projects.length * 15));
+  }
+  profile.placementReadiness.breakdown.projectsPortfolio = projectsPortfolio;
+
   profile.placementReadiness.breakdown.resumeAtsQuality = profile.atsScore || 0;
   profile.placementReadiness.breakdown.marketAlignment = jobs.length && profile.skills.length
     ? Math.round(jobs.reduce((total, job) => total + calculateLocalSemanticMatch(profile, job).overallMatch, 0) / jobs.length)
@@ -231,6 +460,19 @@ const recalculateProfileReadiness = (profile: StudentProfile) => {
     breakdown.mockInterviewPerformance * 0.15 +
     breakdown.marketAlignment * 0.05
   );
+
+  const strengths = new Set(profile.placementReadiness.strengths || []);
+  if (profile.leetcode?.totalSolved && profile.leetcode.totalSolved >= 10) {
+    strengths.add(`LeetCode problem solver: ${profile.leetcode.totalSolved} problems solved (${profile.leetcode.mediumSolved || 0} medium, ${profile.leetcode.hardSolved || 0} hard)`);
+  }
+  if (profile.github?.publicRepos && profile.github.publicRepos >= 2) {
+    strengths.add(`GitHub developer presence: ${profile.github.publicRepos} public repositories`);
+  }
+  if (profile.topCertifications && profile.topCertifications.length > 0) {
+    strengths.add(`Verified credentials: ${profile.topCertifications.length} verified certification(s) with documentation`);
+  }
+  profile.placementReadiness.strengths = Array.from(strengths);
+
   return profile;
 };
 
@@ -368,6 +610,133 @@ app.put('/api/student/profile', (req, res) => {
     });
 });
 
+// Sync GitHub details
+app.post('/api/student/profile/sync-github', async (req, res) => {
+  try {
+    const profile = getActiveStudentProfile();
+    const targetUsername = req.body?.username || profile.github?.username;
+    if (!targetUsername) {
+      return res.status(400).json({ error: 'Please enter a GitHub username or URL to sync' });
+    }
+    const syncedDetails = await fetchGitHubDetails(targetUsername);
+    profile.github = {
+      ...profile.github,
+      ...syncedDetails,
+    };
+    const updated = recalculateProfileReadiness(profile);
+    studentProfiles[getActiveUserId()] = updated;
+    await saveStudentProfile(getActiveUserId(), updated);
+    res.json({
+      success: true,
+      github: profile.github,
+      profile: updated,
+      message: `Successfully synchronized GitHub data for @${syncedDetails.username}! Found ${syncedDetails.publicRepos} public repos and ${syncedDetails.totalStars} stars.`,
+    });
+  } catch (error) {
+    console.error('GitHub sync failed:', error);
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Could not synchronize GitHub data',
+    });
+  }
+});
+
+// Sync LeetCode details
+app.post('/api/student/profile/sync-leetcode', async (req, res) => {
+  try {
+    const profile = getActiveStudentProfile();
+    const targetUsername = req.body?.username || profile.leetcode?.username;
+    if (!targetUsername) {
+      return res.status(400).json({ error: 'Please enter a LeetCode username or URL to sync' });
+    }
+    const syncedDetails = await fetchLeetCodeDetails(targetUsername);
+    profile.leetcode = {
+      ...profile.leetcode,
+      ...syncedDetails,
+    };
+    const updated = recalculateProfileReadiness(profile);
+    studentProfiles[getActiveUserId()] = updated;
+    await saveStudentProfile(getActiveUserId(), updated);
+    res.json({
+      success: true,
+      leetcode: profile.leetcode,
+      profile: updated,
+      message: `Successfully synchronized LeetCode data for @${syncedDetails.username}! Found ${syncedDetails.totalSolved} problems solved.`,
+    });
+  } catch (error) {
+    console.error('LeetCode sync failed:', error);
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Could not synchronize LeetCode data',
+    });
+  }
+});
+
+// Update Top 3 Certifications (with file base64 or Drive links)
+app.put('/api/student/certifications/top', async (req, res) => {
+  try {
+    const profile = getActiveStudentProfile();
+    const { topCertifications } = req.body;
+    if (!Array.isArray(topCertifications)) {
+      return res.status(400).json({ error: 'topCertifications must be an array' });
+    }
+
+    // Limit to top 3 and normalize
+    const validated = topCertifications.slice(0, 3).map((cert: any, idx: number) => ({
+      id: cert.id || `cert_${Date.now()}_${idx}`,
+      name: (cert.name || '').trim(),
+      issuer: (cert.issuer || '').trim(),
+      issueDate: cert.issueDate || '',
+      expiryDate: cert.expiryDate || '',
+      credentialUrl: (cert.credentialUrl || cert.driveLink || '').trim(),
+      driveLink: (cert.driveLink || cert.credentialUrl || '').trim(),
+      fileUrl: cert.fileUrl || '',
+      fileName: cert.fileName || '',
+      fileType: cert.fileType || '',
+      fileSize: Number(cert.fileSize) || 0,
+      skillsCovered: Array.isArray(cert.skillsCovered)
+        ? cert.skillsCovered.map((s: string) => s.trim()).filter(Boolean)
+        : typeof cert.skillsCovered === 'string'
+          ? cert.skillsCovered.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : [],
+      description: (cert.description || '').trim(),
+    })).filter((c: any) => c.name.length > 0);
+
+    profile.topCertifications = validated;
+
+    // Merge into general certifications list so ATS/recommendations stay synchronized
+    const topNames = new Set(validated.map((c: any) => c.name.toLowerCase()));
+    const otherCerts = (profile.certifications || []).filter((c: any) => !topNames.has(c.name.toLowerCase()));
+    profile.certifications = [
+      ...validated.map((c: any) => ({
+        name: c.name,
+        issuer: c.issuer,
+        issueDate: c.issueDate,
+        credentialUrl: c.credentialUrl || c.driveLink,
+        driveLink: c.driveLink,
+        fileUrl: c.fileUrl,
+        fileName: c.fileName,
+        fileType: c.fileType,
+      })),
+      ...otherCerts,
+    ];
+
+    const updated = recalculateProfileReadiness(profile);
+    studentProfiles[getActiveUserId()] = updated;
+    await saveStudentProfile(getActiveUserId(), updated);
+
+    res.json({
+      success: true,
+      topCertifications: profile.topCertifications,
+      profile: updated,
+      message: 'Top certifications successfully saved to your profile!',
+    });
+  } catch (error) {
+    console.error('Failed to save top certifications:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Could not save top certifications',
+    });
+  }
+});
+
 // Resume Upload & AI Extraction (Supports PDF, DOCX, TXT via pdfParse & Gemini multimodal)
 app.post('/api/student/resume/parse', async (req, res) => {
   try {
@@ -473,6 +842,35 @@ app.post('/api/student/resume/parse', async (req, res) => {
       if (parsedResult.experience) profile.experience = parsedResult.experience;
       if (parsedResult.projects) profile.projects = parsedResult.projects;
       if (parsedResult.certifications) profile.certifications = parsedResult.certifications;
+
+      const detectedGh = parsedResult.github?.username || parsedResult.githubUsername;
+      if (detectedGh && (!profile.github?.username || profile.github.username === '')) {
+        const ghUsername = cleanGitHubUsername(detectedGh);
+        profile.github = {
+          username: ghUsername,
+          profileUrl: `https://github.com/${ghUsername}`,
+          publicRepos: profile.github?.publicRepos || 0,
+          totalStars: profile.github?.totalStars || 0,
+          followers: profile.github?.followers || 0,
+          topLanguages: profile.github?.topLanguages || [],
+        };
+      }
+
+      const detectedLc = parsedResult.leetcode?.username || parsedResult.leetcodeUsername;
+      if (detectedLc && (!profile.leetcode?.username || profile.leetcode.username === '')) {
+        const lcUsername = cleanLeetCodeUsername(detectedLc);
+        profile.leetcode = {
+          username: lcUsername,
+          profileUrl: `https://leetcode.com/u/${lcUsername}`,
+          ranking: profile.leetcode?.ranking || 0,
+          rating: profile.leetcode?.rating || 0,
+          totalSolved: profile.leetcode?.totalSolved || 0,
+          easySolved: profile.leetcode?.easySolved || 0,
+          mediumSolved: profile.leetcode?.mediumSolved || 0,
+          hardSolved: profile.leetcode?.hardSolved || 0,
+          acceptanceRate: profile.leetcode?.acceptanceRate || 0,
+        };
+      }
     }
 
     profile.resumeRawText = processedText || profile.resumeRawText || '';
@@ -999,6 +1397,9 @@ app.get('/api/recruiter/jobs/:id/candidates', async (req, res) => {
       skills: profile.skills,
       atsScore: profile.atsScore,
       readinessScore: profile.placementReadiness.overall,
+      github: profile.github,
+      leetcode: profile.leetcode,
+      topCertifications: profile.topCertifications || [],
       profile: {
         headline: profile.headline,
         bio: profile.bio,
@@ -1012,6 +1413,9 @@ app.get('/api/recruiter/jobs/:id/candidates', async (req, res) => {
         experience: profile.experience,
         projects: profile.projects,
         certifications: profile.certifications,
+        topCertifications: profile.topCertifications || [],
+        github: profile.github,
+        leetcode: profile.leetcode,
         resumeFileName: profile.resumeFileName,
         resumeLastUpdated: profile.resumeLastUpdated,
         resumeRawText: profile.resumeRawText,

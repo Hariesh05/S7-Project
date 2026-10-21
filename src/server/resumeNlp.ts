@@ -114,6 +114,40 @@ export function parseResumeWithNlp(text: string, catalogSkills: SkillNode[], fal
   const institutionLine = (sections.education || []).find(line => /university|college|institute|school/i.test(line));
   const cgpaMatch = text.match(/\b(?:cgpa|gpa)\s*[:\-]?\s*(\d(?:\.\d{1,2})?)/i);
   const yearMatch = text.match(/\b(?:expected|graduation|class of)\s*(20\d{2})\b/i);
+  const githubMatch = text.match(/(?:https?:\/\/)?(?:www\.)?github\.com\/([a-zA-Z0-9_\-]+)/i)
+    || text.match(/\bgithub\s*[:\-]\s*([a-zA-Z0-9_\-]+)\b/i);
+  const leetcodeMatch = text.match(/(?:https?:\/\/)?(?:www\.)?leetcode\.com\/(?:u\/)?([a-zA-Z0-9_\-]+)/i)
+    || text.match(/\bleetcode\s*[:\-]\s*([a-zA-Z0-9_\-]+)\b/i);
+
+  const detectedGitHubUsername = githubMatch && !['com', 'org', 'io', 'actions'].includes(githubMatch[1].toLowerCase()) ? githubMatch[1] : '';
+  const detectedLeetCodeUsername = leetcodeMatch && !['com', 'problem', 'problems'].includes(leetcodeMatch[1].toLowerCase()) ? leetcodeMatch[1] : '';
+
+  const githubDetails = detectedGitHubUsername
+    ? {
+        username: detectedGitHubUsername,
+        profileUrl: `https://github.com/${detectedGitHubUsername}`,
+        publicRepos: fallbackProfile.github?.publicRepos || 0,
+        totalStars: fallbackProfile.github?.totalStars || 0,
+        followers: fallbackProfile.github?.followers || 0,
+        topLanguages: fallbackProfile.github?.topLanguages || [],
+        ...fallbackProfile.github,
+      }
+    : fallbackProfile.github;
+
+  const leetcodeDetails = detectedLeetCodeUsername
+    ? {
+        username: detectedLeetCodeUsername,
+        profileUrl: `https://leetcode.com/u/${detectedLeetCodeUsername}`,
+        ranking: fallbackProfile.leetcode?.ranking || 0,
+        rating: fallbackProfile.leetcode?.rating || 0,
+        totalSolved: fallbackProfile.leetcode?.totalSolved || 0,
+        easySolved: fallbackProfile.leetcode?.easySolved || 0,
+        mediumSolved: fallbackProfile.leetcode?.mediumSolved || 0,
+        hardSolved: fallbackProfile.leetcode?.hardSolved || 0,
+        ...fallbackProfile.leetcode,
+      }
+    : fallbackProfile.leetcode;
+
   return {
     ...fallbackProfile,
     headline: detectedName ? `${detectedName} · Student` : fallbackProfile.headline,
@@ -123,6 +157,8 @@ export function parseResumeWithNlp(text: string, catalogSkills: SkillNode[], fal
     graduationYear: yearMatch ? Number(yearMatch[1]) : fallbackProfile.graduationYear,
     targetRoles: fallbackProfile.targetRoles,
     skills: extractedSkills,
+    github: githubDetails,
+    leetcode: leetcodeDetails,
     education: sections.education?.length
       ? [{
           institution: institutionLine || '',

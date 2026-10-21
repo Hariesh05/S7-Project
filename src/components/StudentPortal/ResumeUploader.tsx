@@ -325,6 +325,21 @@ export const ResumeUploader: React.FC<ResumeUploaderProps> = ({
                 <span className="text-slate-500 font-medium">Resume File:</span>
                 <span className="font-semibold text-indigo-700">{profile.resumeFileName}</span>
               </div>
+
+              {(profile.github?.username || profile.leetcode?.username) && (
+                <div className="pt-2 border-t border-slate-200/60 flex flex-wrap gap-2 text-xs">
+                  {profile.github?.username && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-medium">
+                      GitHub: @{profile.github.username} {profile.github.publicRepos ? `(${profile.github.publicRepos} repos)` : ''}
+                    </span>
+                  )}
+                  {profile.leetcode?.username && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-medium">
+                      LeetCode: @{profile.leetcode.username} {profile.leetcode.totalSolved ? `(${profile.leetcode.totalSolved} solved)` : ''}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Extracted Skills Matrix */}

@@ -32,6 +32,8 @@ const RESUME_SCHEMA = {
     targetRoles: { type: Type.ARRAY, items: { type: Type.STRING } },
     bio: { type: Type.STRING },
     atsScore: { type: Type.INTEGER },
+    githubUsername: { type: Type.STRING },
+    leetcodeUsername: { type: Type.STRING },
     skills: {
       type: Type.ARRAY,
       items: {
@@ -116,7 +118,7 @@ export async function parseResumeWithGemini(
   try {
     const promptText = `You are an expert student career coach and technical resume parser.
 Extract detailed, high-accuracy structured data from this student resume.
-Identify all technical and soft skills, categorize them (frontend, backend, ai_ml, devops, database, mobile, core_cs), estimate proficiency from 1 to 5 based on experience depth, extract education, work experience, projects, and certifications.
+Identify all technical and soft skills, categorize them (frontend, backend, ai_ml, devops, database, mobile, core_cs), estimate proficiency from 1 to 5 based on experience depth, extract education, work experience, projects, certifications, and any GitHub or LeetCode usernames/URLs mentioned in the resume.
 Also evaluate the overall resume quality and estimate an ATS score between 45 and 95.`;
 
     let contentsPayload: any;

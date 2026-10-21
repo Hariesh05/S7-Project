@@ -9,6 +9,30 @@ export interface User {
   createdAt: string;
 }
 
+export interface GitHubDetails {
+  username: string;
+  profileUrl?: string;
+  publicRepos?: number;
+  totalStars?: number;
+  followers?: number;
+  contributions?: number;
+  topLanguages?: string[];
+  lastSyncedAt?: string;
+}
+
+export interface LeetCodeDetails {
+  username: string;
+  profileUrl?: string;
+  ranking?: number;
+  rating?: number;
+  totalSolved?: number;
+  easySolved?: number;
+  mediumSolved?: number;
+  hardSolved?: number;
+  acceptanceRate?: number;
+  lastSyncedAt?: string;
+}
+
 export interface StudentProfile {
   id: string;
   userId: string;
@@ -24,6 +48,9 @@ export interface StudentProfile {
   experience: WorkExperience[];
   projects: StudentProject[];
   certifications: Certification[];
+  topCertifications?: Certification[];
+  github?: GitHubDetails;
+  leetcode?: LeetCodeDetails;
   placementReadiness: PlacementReadinessScore;
   atsScore: number;
   resumeUrl?: string;
@@ -71,10 +98,19 @@ export interface StudentProject {
 }
 
 export interface Certification {
+  id?: string;
   name: string;
   issuer: string;
   issueDate: string;
+  expiryDate?: string;
   credentialUrl?: string;
+  driveLink?: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number;
+  skillsCovered?: string[];
+  description?: string;
 }
 
 export interface PlacementReadinessScore {

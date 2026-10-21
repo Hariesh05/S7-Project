@@ -54,7 +54,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Gemini Live Indicator */}
             <div className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
               <Cpu className={`w-3.5 h-3.5 ${hasGeminiKey ? 'text-emerald-500' : 'text-amber-500'}`} />
-              <span className="font-mono">Gemini 3.8 Flash</span>
+              {/* <span className="font-mono">Gemini 3.8 Flash</span> */}
               <span className={`w-1.5 h-1.5 rounded-full ${hasGeminiKey ? 'bg-emerald-500' : 'bg-amber-400 animate-pulse'}`} />
             </div>
 

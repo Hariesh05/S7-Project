@@ -12,6 +12,9 @@ import {
   UserCheck,
   Mail,
   GraduationCap,
+  Github,
+  Code2,
+  ExternalLink,
 } from 'lucide-react';
 
 interface CandidateRankingViewProps {
@@ -174,6 +177,20 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
                         <div className="text-[10px] text-slate-400">
                           {cand.university} · CGPA: <strong className="text-slate-700">{cand.cgpa}</strong>
                         </div>
+                        {(cand.github?.username || cand.leetcode?.username) && (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            {cand.github?.username && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 font-medium">
+                                GitHub: @{cand.github.username}
+                              </span>
+                            )}
+                            {cand.leetcode?.username && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200 font-medium">
+                                LC: {cand.leetcode.totalSolved ?? 0} solved
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -283,6 +300,82 @@ export const CandidateRankingView: React.FC<CandidateRankingViewProps> = ({ sele
                         <li key={`certification_${index}`}>{certification.name}{certification.issuer ? ` · ${certification.issuer}` : ''}{certification.issueDate ? ` · ${certification.issueDate}` : ''}</li>
                       ))}
                     </ul>
+                  </div>
+                )}
+
+                {/* Developer Presence & Coding Profiles */}
+                {(selectedCandidate.github?.username || selectedCandidate.leetcode?.username || selectedCandidate.profile?.github?.username || selectedCandidate.profile?.leetcode?.username) && (
+                  <div className="space-y-2 border-t border-slate-200 pt-3">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Developer & Coding Profiles</span>
+                    <div className="grid grid-cols-1 gap-2.5">
+                      {(selectedCandidate.github?.username || selectedCandidate.profile?.github?.username) && (() => {
+                        const gh = selectedCandidate.github || selectedCandidate.profile?.github;
+                        return (
+                          <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <Github className="w-4 h-4 text-slate-800" />
+                                <span className="text-xs font-bold text-slate-900">GitHub</span>
+                                <a
+                                  href={gh.profileUrl || `https://github.com/${gh.username}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs text-indigo-600 font-semibold hover:underline inline-flex items-center gap-0.5"
+                                >
+                                  @{gh.username}
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-semibold">
+                                {gh.publicRepos ?? 0} repos · {gh.totalStars ?? 0} ★
+                              </span>
+                            </div>
+                            {gh.topLanguages && gh.topLanguages.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {gh.topLanguages.map((lang: string) => (
+                                  <span key={lang} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+                                    {lang}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {(selectedCandidate.leetcode?.username || selectedCandidate.profile?.leetcode?.username) && (() => {
+                        const lc = selectedCandidate.leetcode || selectedCandidate.profile?.leetcode;
+                        return (
+                          <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-xs font-black text-amber-600 bg-amber-100 px-1 rounded">LC</span>
+                                <span className="text-xs font-bold text-slate-900">LeetCode</span>
+                                <a
+                                  href={lc.profileUrl || `https://leetcode.com/u/${lc.username}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs text-amber-700 font-semibold hover:underline inline-flex items-center gap-0.5"
+                                >
+                                  @{lc.username}
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-semibold">
+                                {lc.ranking ? `Rank #${lc.ranking.toLocaleString()}` : ''}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px]">
+                              <span className="font-bold text-slate-900">{lc.totalSolved ?? 0} Solved</span>
+                              <span className="text-slate-300">·</span>
+                              <span className="text-emerald-700 font-medium">Easy: {lc.easySolved ?? 0}</span>
+                              <span className="text-amber-700 font-medium">Med: {lc.mediumSolved ?? 0}</span>
+                              <span className="text-rose-700 font-medium">Hard: {lc.hardSolved ?? 0}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 )}
                 {selectedCandidate.profile?.resumeRawText && (

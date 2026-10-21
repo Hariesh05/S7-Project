@@ -1,18 +1,36 @@
 import React, { useEffect, useState } from 'react';
-import { Check, Plus, Save, Trash2, UserRound } from 'lucide-react';
+import {
+  Check,
+  Plus,
+  Save,
+  Trash2,
+  UserRound,
+  Github,
+  Code2,
+  ExternalLink,
+  RefreshCw,
+  Award,
+  Eye,
+  FileText,
+  Image as ImageIcon,
+} from 'lucide-react';
 import {
   Certification,
   Education,
+  GitHubDetails,
+  LeetCodeDetails,
   StudentProfile,
   StudentProject,
   StudentSkill,
   WorkExperience,
 } from '../../types/index.ts';
+import { CertificateInspectModal } from './CertificateInspectModal.tsx';
 
 interface StudentProfileEditorProps {
   profile: StudentProfile;
   onProfileUpdated: (profile: StudentProfile) => void;
   onOpenResume: () => void;
+  onOpenCertifications?: () => void;
 }
 
 const fieldClass = 'mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
@@ -26,18 +44,121 @@ const newSkill = (): StudentSkill => ({
   yearsExperience: 0,
 });
 
-export const StudentProfileEditor: React.FC<StudentProfileEditorProps> = ({ profile, onProfileUpdated, onOpenResume }) => {
+export const StudentProfileEditor: React.FC<StudentProfileEditorProps> = ({
+  profile,
+  onProfileUpdated,
+  onOpenResume,
+  onOpenCertifications,
+}) => {
   const [draft, setDraft] = useState(profile);
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [syncingGitHub, setSyncingGitHub] = useState(false);
+  const [syncingLeetCode, setSyncingLeetCode] = useState(false);
+  const [syncSuccessMsg, setSyncSuccessMsg] = useState('');
+  const [inspectCert, setInspectCert] = useState<Certification | null>(null);
 
   useEffect(() => setDraft(profile), [profile]);
 
   const update = <K extends keyof StudentProfile>(key: K, value: StudentProfile[K]) => {
     setDraft(current => ({ ...current, [key]: value }));
     setSaved(false);
+  };
+
+  const updateGitHub = (field: keyof GitHubDetails, val: any) => {
+    setDraft(curr => ({
+      ...curr,
+      github: {
+        username: '',
+        profileUrl: '',
+        publicRepos: 0,
+        totalStars: 0,
+        followers: 0,
+        contributions: 0,
+        topLanguages: [],
+        ...curr.github,
+        [field]: val,
+      },
+    }));
+    setSaved(false);
+  };
+
+  const updateLeetCode = (field: keyof LeetCodeDetails, val: any) => {
+    setDraft(curr => ({
+      ...curr,
+      leetcode: {
+        username: '',
+        profileUrl: '',
+        ranking: 0,
+        rating: 0,
+        totalSolved: 0,
+        easySolved: 0,
+        mediumSolved: 0,
+        hardSolved: 0,
+        acceptanceRate: 0,
+        ...curr.leetcode,
+        [field]: val,
+      },
+    }));
+    setSaved(false);
+  };
+
+  const handleSyncGitHub = async () => {
+    const username = draft.github?.username?.trim();
+    if (!username) {
+      setError('Please enter a GitHub username or URL to sync.');
+      return;
+    }
+    setSyncingGitHub(true);
+    setError('');
+    setSyncSuccessMsg('');
+    try {
+      const res = await fetch('/api/student/profile/sync-github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'GitHub sync failed');
+      setDraft(data.profile);
+      onProfileUpdated(data.profile);
+      setSyncSuccessMsg(data.message || 'GitHub stats synchronized successfully!');
+      setTimeout(() => setSyncSuccessMsg(''), 5000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync GitHub profile');
+    } finally {
+      setSyncingGitHub(false);
+    }
+  };
+
+  const handleSyncLeetCode = async () => {
+    const username = draft.leetcode?.username?.trim();
+    if (!username) {
+      setError('Please enter a LeetCode username or URL to sync.');
+      return;
+    }
+    setSyncingLeetCode(true);
+    setError('');
+    setSyncSuccessMsg('');
+    try {
+      const res = await fetch('/api/student/profile/sync-leetcode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'LeetCode sync failed');
+      setDraft(data.profile);
+      onProfileUpdated(data.profile);
+      setSyncSuccessMsg(data.message || 'LeetCode stats synchronized successfully!');
+      setTimeout(() => setSyncSuccessMsg(''), 5000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync LeetCode profile');
+    } finally {
+      setSyncingLeetCode(false);
+    }
   };
 
   const updateEducation = (index: number, patch: Partial<Education>) =>
@@ -65,6 +186,21 @@ export const StudentProfileEditor: React.FC<StudentProfileEditorProps> = ({ prof
           skillId: `s_${skill.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
         })),
         targetRoles: draft.targetRoles.map(role => role.trim()).filter(Boolean),
+        github: draft.github ? {
+          ...draft.github,
+          username: draft.github.username?.trim() || '',
+          profileUrl: draft.github.username?.trim()
+            ? (draft.github.profileUrl || `https://github.com/${draft.github.username.trim()}`)
+            : '',
+          topLanguages: Array.isArray(draft.github.topLanguages) ? draft.github.topLanguages : [],
+        } : undefined,
+        leetcode: draft.leetcode ? {
+          ...draft.leetcode,
+          username: draft.leetcode.username?.trim() || '',
+          profileUrl: draft.leetcode.username?.trim()
+            ? (draft.leetcode.profileUrl || `https://leetcode.com/u/${draft.leetcode.username.trim()}`)
+            : '',
+        } : undefined,
       };
       const response = await fetch('/api/student/profile', {
         method: 'PUT',
@@ -107,6 +243,186 @@ export const StudentProfileEditor: React.FC<StudentProfileEditorProps> = ({ prof
           </div>
         </section>
 
+        {/* Coding Profiles & Technical Presence */}
+        <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Code2 className="w-4 h-4 text-indigo-600" />
+                <span>Coding Profiles & Developer Presence</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Verified LeetCode algorithms practice and GitHub open-source repositories.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* GitHub Card */}
+            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/60 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shrink-0">
+                      <Github className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">GitHub Profile</h4>
+                      {profile.github?.username ? (
+                        <a
+                          href={profile.github.profileUrl || `https://github.com/${profile.github.username}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-indigo-600 font-semibold hover:underline inline-flex items-center gap-1"
+                        >
+                          @{profile.github.username}
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      ) : (
+                        <span className="text-xs text-slate-400">Not linked</span>
+                      )}
+                    </div>
+                  </div>
+                  {profile.github?.username && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-700 font-medium">
+                      Linked
+                    </span>
+                  )}
+                </div>
+
+                {profile.github?.username ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white p-2 rounded-lg border border-slate-200">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Repos</span>
+                        <span className="text-sm font-black text-slate-900">{profile.github.publicRepos ?? 0}</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-lg border border-slate-200">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Stars</span>
+                        <span className="text-sm font-black text-amber-600">{profile.github.totalStars ?? 0} ★</span>
+                      </div>
+                      <div className="bg-white p-2 rounded-lg border border-slate-200">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Followers</span>
+                        <span className="text-sm font-black text-slate-900">{profile.github.followers ?? 0}</span>
+                      </div>
+                    </div>
+
+                    {profile.github.topLanguages && profile.github.topLanguages.length > 0 && (
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Top Languages</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {profile.github.topLanguages.map(lang => (
+                            <span
+                              key={lang}
+                              className="text-[11px] px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md font-medium border border-indigo-100"
+                            >
+                              {lang}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {profile.github.lastSyncedAt && (
+                      <p className="text-[10px] text-slate-400">
+                        Synced {new Date(profile.github.lastSyncedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 mt-3">
+                    Add your GitHub handle to showcase your open-source projects, stars, and languages.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* LeetCode Card */}
+            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/60 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-2xs">
+                      <span>LC</span>
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">LeetCode Profile</h4>
+                      {profile.leetcode?.username ? (
+                        <a
+                          href={profile.leetcode.profileUrl || `https://leetcode.com/u/${profile.leetcode.username}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-amber-700 font-semibold hover:underline inline-flex items-center gap-1"
+                        >
+                          @{profile.leetcode.username}
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      ) : (
+                        <span className="text-xs text-slate-400">Not linked</span>
+                      )}
+                    </div>
+                  </div>
+                  {profile.leetcode?.ranking ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
+                      Rank #{profile.leetcode.ranking.toLocaleString()}
+                    </span>
+                  ) : profile.leetcode?.username ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-700 font-medium">
+                      Linked
+                    </span>
+                  ) : null}
+                </div>
+
+                {profile.leetcode?.username ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Solved</span>
+                        <span className="text-lg font-black text-slate-900">{profile.leetcode.totalSolved ?? 0}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] px-2 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-semibold">
+                          Easy: {profile.leetcode.easySolved ?? 0}
+                        </span>
+                        <span className="text-[10px] px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded font-semibold">
+                          Med: {profile.leetcode.mediumSolved ?? 0}
+                        </span>
+                        <span className="text-[10px] px-2 py-1 bg-rose-50 text-rose-700 border border-rose-200 rounded font-semibold">
+                          Hard: {profile.leetcode.hardSolved ?? 0}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-center text-xs">
+                      <div className="bg-white p-2 rounded-lg border border-slate-200">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Contest Rating</span>
+                        <span className="font-bold text-indigo-700">
+                          {profile.leetcode.rating ? profile.leetcode.rating : 'Unrated'}
+                        </span>
+                      </div>
+                      <div className="bg-white p-2 rounded-lg border border-slate-200">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Global Rank</span>
+                        <span className="font-bold text-slate-800">
+                          {profile.leetcode.ranking ? `#${profile.leetcode.ranking.toLocaleString()}` : 'Unranked'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {profile.leetcode.lastSyncedAt && (
+                      <p className="text-[10px] text-slate-400">
+                        Synced {new Date(profile.leetcode.lastSyncedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 mt-3">
+                    Link your LeetCode profile to verify your problem solving abilities for recruiters.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
           <div><h3 className="text-sm font-bold text-slate-900">Skills</h3><p className="text-xs text-slate-500 mt-1">Self-entered skills remain saved alongside resume-extracted skills.</p></div>
           {profile.skills.length ? <div className="flex flex-wrap gap-2">{profile.skills.map(skill => (
@@ -132,6 +448,110 @@ export const StudentProfileEditor: React.FC<StudentProfileEditorProps> = ({ prof
           {profile.projects.map((item, index) => <div key={`project_${index}`} className="border-t border-slate-100 pt-3"><p className="text-sm font-semibold text-slate-800">{item.title}</p><p className="text-xs text-slate-700 mt-1">{item.description}</p>{item.technologies.length > 0 && <p className="text-xs text-slate-500 mt-1">{item.technologies.join(', ')}</p>}</div>)}
           {profile.certifications.map((item, index) => <p key={`certification_${index}`} className="border-t border-slate-100 pt-3 text-xs text-slate-700">{item.name}{item.issuer ? ` · ${item.issuer}` : ''}{item.issueDate ? ` · ${item.issueDate}` : ''}</p>)}
           {!profile.projects.length && !profile.certifications.length && <p className="text-sm text-slate-500">No projects or certifications.</p>}
+        </section>
+
+        {/* Top 3 Verified Certifications Section */}
+        <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Award className="w-4 h-4 text-amber-500" />
+                <span>Top 3 Verified Certifications</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Official credentials inspectable by recruiters upon job application.
+              </p>
+            </div>
+            {onOpenCertifications && (
+              <button
+                type="button"
+                onClick={onOpenCertifications}
+                className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1 self-start sm:self-auto"
+              >
+                <span>Upload / Manage Top 3</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          {profile.topCertifications && profile.topCertifications.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {profile.topCertifications.map((cert, idx) => {
+                const hasDoc = Boolean(cert.fileUrl);
+                const hasDrive = Boolean(cert.driveLink || cert.credentialUrl);
+                const isPdf = cert.fileType === 'application/pdf' || /\.pdf$/i.test(cert.fileName || '');
+
+                return (
+                  <div key={cert.id || idx} className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-black flex items-center justify-center">
+                          #{idx + 1}
+                        </span>
+                        {(hasDoc || hasDrive) && (
+                          <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-emerald-100 text-emerald-800">
+                            Verified
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-900 mt-2 line-clamp-2">{cert.name}</h4>
+                      <p className="text-[11px] text-slate-600 mt-0.5">{cert.issuer}</p>
+                      {cert.issueDate && <p className="text-[10px] text-slate-400 mt-0.5">{cert.issueDate}</p>}
+
+                      {cert.skillsCovered && cert.skillsCovered.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {cert.skillsCovered.slice(0, 3).map(skill => (
+                            <span key={skill} className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 font-medium">
+                              {skill}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                      {hasDoc ? (
+                        <button
+                          type="button"
+                          onClick={() => setInspectCert(cert)}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Inspect ({isPdf ? 'PDF' : 'Image'})</span>
+                        </button>
+                      ) : hasDrive ? (
+                        <a
+                          href={cert.driveLink || cert.credentialUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:underline"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>View Drive Link</span>
+                        </a>
+                      ) : (
+                        <span className="text-[10px] text-slate-400">No document attached</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-4 text-center border border-dashed border-slate-200 rounded-xl space-y-2">
+              <p className="text-xs text-slate-500">No top certifications uploaded yet.</p>
+              {onOpenCertifications && (
+                <button
+                  type="button"
+                  onClick={onOpenCertifications}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Upload Top 3 Certifications (Image, PDF, or Drive Link)</span>
+                </button>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -176,6 +596,206 @@ export const StudentProfileEditor: React.FC<StudentProfileEditorProps> = ({ prof
           <label className="text-xs font-semibold text-slate-700 md:col-span-2">Target roles (comma-separated)
             <input className={fieldClass} value={draft.targetRoles.join(', ')} onChange={event => update('targetRoles', event.target.value.split(',').map(role => role.trim()).filter(Boolean))} placeholder="Backend Developer, Data Analyst" />
           </label>
+        </div>
+      </section>
+
+      {/* GitHub & LeetCode Profiles Section */}
+      <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <header className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <Code2 className="w-5 h-5 text-indigo-600" />
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">GitHub & LeetCode Profiles</h2>
+              <p className="text-xs text-slate-500">Provide your handles to showcase live technical stats to recruiters.</p>
+            </div>
+          </div>
+        </header>
+
+        {syncSuccessMsg && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{syncSuccessMsg}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* GitHub Edit Box */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-md bg-slate-900 text-white flex items-center justify-center">
+                  <Github className="w-3.5 h-3.5" />
+                </div>
+                <span className="text-xs font-bold text-slate-900">GitHub Details</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSyncGitHub}
+                disabled={syncingGitHub || !draft.github?.username}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 transition-colors"
+              >
+                {syncingGitHub ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                <span>{syncingGitHub ? 'Fetching...' : 'Sync GitHub'}</span>
+              </button>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700">GitHub Username or Profile URL</label>
+              <input
+                className={fieldClass}
+                placeholder="e.g. torvalds or https://github.com/torvalds"
+                value={draft.github?.username || ''}
+                onChange={e => updateGitHub('username', e.target.value)}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600">Public Repos</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.github?.publicRepos ?? ''}
+                  onChange={e => updateGitHub('publicRepos', Number(e.target.value) || 0)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600">Total Stars</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.github?.totalStars ?? ''}
+                  onChange={e => updateGitHub('totalStars', Number(e.target.value) || 0)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600">Followers</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.github?.followers ?? ''}
+                  onChange={e => updateGitHub('followers', Number(e.target.value) || 0)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-semibold text-slate-600">Top Languages (comma-separated)</label>
+              <input
+                className={fieldClass}
+                placeholder="TypeScript, Python, Go"
+                value={draft.github?.topLanguages?.join(', ') || ''}
+                onChange={e =>
+                  updateGitHub(
+                    'topLanguages',
+                    e.target.value.split(',').map(s => s.trim()).filter(Boolean)
+                  )
+                }
+              />
+            </div>
+          </div>
+
+          {/* LeetCode Edit Box */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-md bg-amber-500 text-white flex items-center justify-center font-bold text-xs">
+                  <span>LC</span>
+                </div>
+                <span className="text-xs font-bold text-slate-900">LeetCode Details</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSyncLeetCode}
+                disabled={syncingLeetCode || !draft.leetcode?.username}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-40 transition-colors"
+              >
+                {syncingLeetCode ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                <span>{syncingLeetCode ? 'Fetching...' : 'Sync LeetCode'}</span>
+              </button>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700">LeetCode Username or Profile URL</label>
+              <input
+                className={fieldClass}
+                placeholder="e.g. neal_wu or https://leetcode.com/u/neal_wu"
+                value={draft.leetcode?.username || ''}
+                onChange={e => updateLeetCode('username', e.target.value)}
+              />
+            </div>
+
+            <div className="grid grid-cols-4 gap-2">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600">Total Solved</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.leetcode?.totalSolved ?? ''}
+                  onChange={e => updateLeetCode('totalSolved', Number(e.target.value) || 0)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-emerald-700">Easy</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.leetcode?.easySolved ?? ''}
+                  onChange={e => updateLeetCode('easySolved', Number(e.target.value) || 0)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-amber-700">Medium</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.leetcode?.mediumSolved ?? ''}
+                  onChange={e => updateLeetCode('mediumSolved', Number(e.target.value) || 0)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-rose-700">Hard</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  value={draft.leetcode?.hardSolved ?? ''}
+                  onChange={e => updateLeetCode('hardSolved', Number(e.target.value) || 0)}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600">Global Ranking</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  placeholder="e.g. 54200"
+                  value={draft.leetcode?.ranking ?? ''}
+                  onChange={e => updateLeetCode('ranking', Number(e.target.value) || 0)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-600">Contest Rating</label>
+                <input
+                  type="number"
+                  min="0"
+                  className={fieldClass}
+                  placeholder="e.g. 1850"
+                  value={draft.leetcode?.rating ?? ''}
+                  onChange={e => updateLeetCode('rating', Number(e.target.value) || 0)}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

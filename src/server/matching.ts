@@ -41,6 +41,12 @@ export function calculateLocalSemanticMatch(studentProfile: StudentProfile, job:
   if (studentProfile.experience.length) whyRecommended.push(`${studentProfile.experience.length} work experience record(s) are on the profile.`);
   if (studentProfile.projects.length) whyRecommended.push(`${studentProfile.projects.length} project record(s) are on the profile.`);
   if (studentProfile.degree && studentProfile.university) whyRecommended.push(`Education details are available for ${studentProfile.degree}.`);
+  if (studentProfile.leetcode?.totalSolved) {
+    whyRecommended.push(`${studentProfile.leetcode.totalSolved} LeetCode problems solved (${studentProfile.leetcode.mediumSolved || 0} medium, ${studentProfile.leetcode.hardSolved || 0} hard) validates core problem-solving ability.`);
+  }
+  if (studentProfile.github?.publicRepos) {
+    whyRecommended.push(`${studentProfile.github.publicRepos} GitHub repositories (${studentProfile.github.topLanguages?.slice(0, 3).join(', ') || 'multiple languages'}) confirm hands-on coding experience.`);
+  }
 
   return {
     jobId: job.id,

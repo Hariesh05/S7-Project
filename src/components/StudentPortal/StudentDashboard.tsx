@@ -4,6 +4,7 @@ import { PlacementReadinessCard } from './PlacementReadinessCard.tsx';
 import { DigitalTwinSimulator } from './DigitalTwinSimulator.tsx';
 import { ResumeUploader } from './ResumeUploader.tsx';
 import { StudentProfileEditor } from './StudentProfileEditor.tsx';
+import { CertificationsManager } from './CertificationsManager.tsx';
 import { ResumeEvidenceMap } from './ResumeEvidenceMap.tsx';
 import { LiveSkillKnowledgeGraph } from './LiveSkillKnowledgeGraph.tsx';
 import { JobRecommendations } from './JobRecommendations.tsx';
@@ -27,6 +28,8 @@ import {
   ArrowRight,
   UserRound,
   ClipboardCheck,
+  Github,
+  ExternalLink,
 } from 'lucide-react';
 
 interface StudentDashboardProps {
@@ -39,7 +42,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
   const [skillsTaxonomy, setSkillsTaxonomy] = useState<any[]>([]);
   const [skillEdges, setSkillEdges] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'profile' | 'resume' | 'evidence' | 'graph' | 'jobs' | 'roadmap' | 'ats' | 'interview' | 'applications'
+    'overview' | 'profile' | 'certifications' | 'resume' | 'evidence' | 'graph' | 'jobs' | 'roadmap' | 'ats' | 'interview' | 'applications'
   >('overview');
   const [loading, setLoading] = useState(true);
 
@@ -99,6 +102,40 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
               {profile.university && <span>{profile.university}</span>}
               {profile.cgpa > 0 && <span>CGPA: <strong className="text-slate-800">{profile.cgpa}</strong></span>}
               <span>{profile.skills.length} Profile Skills</span>
+              {profile.github?.username && (
+                <a
+                  href={profile.github.profileUrl || `https://github.com/${profile.github.username}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 hover:bg-slate-200 font-semibold transition-colors"
+                >
+                  <Github className="w-3 h-3" />
+                  <span>@{profile.github.username}</span>
+                  {profile.github.publicRepos ? <span className="text-[10px] text-slate-500 font-normal">({profile.github.publicRepos} repos)</span> : null}
+                </a>
+              )}
+              {profile.leetcode?.username && (
+                <a
+                  href={profile.leetcode.profileUrl || `https://leetcode.com/u/${profile.leetcode.username}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 font-semibold transition-colors"
+                >
+                  <span className="font-mono text-[10px] font-bold">LC:</span>
+                  <span>@{profile.leetcode.username}</span>
+                  {profile.leetcode.totalSolved ? <span className="text-[10px] text-amber-700 font-normal">({profile.leetcode.totalSolved} solved)</span> : null}
+                </a>
+              )}
+              {profile.topCertifications && profile.topCertifications.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('certifications')}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-900 border border-indigo-200 hover:bg-indigo-100 font-semibold transition-colors"
+                >
+                  <Award className="w-3 h-3 text-indigo-600" />
+                  <span>{profile.topCertifications.length} Top Certs</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -133,6 +170,20 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
           <span>Profile</span>
         </button>
         <button
+          onClick={() => setActiveTab('certifications')}
+          className={`flex items-center space-x-2 py-3 px-3.5 text-xs font-semibold border-b-2 whitespace-nowrap transition-all ${
+            activeTab === 'certifications' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Award className="w-4 h-4" />
+          <span>Top Certifications</span>
+          {profile.topCertifications && profile.topCertifications.length > 0 ? (
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 font-bold">
+              {profile.topCertifications.length}/3
+            </span>
+          ) : null}
+        </button>
+        <button
           onClick={() => setActiveTab('overview')}
           className={`flex items-center space-x-2 py-3 px-3.5 text-xs font-semibold border-b-2 whitespace-nowrap transition-all ${
             activeTab === 'overview'
@@ -156,7 +207,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
           <span>Resume & Skill Extraction</span>
         </button>
 
-        <button
+        {/* <button
           onClick={() => setActiveTab('graph')}
           className={`flex items-center space-x-2 py-3 px-3.5 text-xs font-semibold border-b-2 whitespace-nowrap transition-all ${
             activeTab === 'graph'
@@ -166,7 +217,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
         >
           <Network className="w-4 h-4" />
           <span>Knowledge Graph (DAG)</span>
-        </button>
+        </button> */}
 
         <button
           onClick={() => setActiveTab('evidence')}
@@ -314,6 +365,14 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUser 
           profile={profile}
           onProfileUpdated={updated => setProfile(updated)}
           onOpenResume={() => setActiveTab('resume')}
+        />
+      )}
+
+      {activeTab === 'certifications' && (
+        <CertificationsManager
+          profile={profile}
+          onProfileUpdated={updated => setProfile(updated)}
+          onNavigateToJobs={() => setActiveTab('jobs')}
         />
       )}
 
